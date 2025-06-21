@@ -1,11 +1,11 @@
 # Hot-Ham: High-order Tensor machine-learning Hamiltonian
 ## Introduction
-**Hot-Ham** is a Python package designed for constructing E(3)-equivariant machine learning models to predict Density Functional Theory (DFT) Hamiltonians. The framework is based on message passing neural networks(MPNNs), using spherical tensors to represent E(3)-equivariant node and edge features. **Hot-Ham** utilizes SO(2) convolution and Gaunt tensor product to achieve efficient high order spherical tensor products, which is critical to improve models' accuracy.
+**Hot-Ham** is a Python package designed for constructing E(3)-equivariant machine learning models to predict Density Functional Theory (DFT) Hamiltonians. The framework is based on message passing neural networks(MPNNs), using spherical tensors to represent E(3)-equivariant node and edge features. **Hot-Ham** utilizes local coordinate transformation and Gaunt tensor product to achieve efficient high-order spherical tensor products, which is critical to improve models' accuracy.
 
 ## Current Features
 - Building density functional theory Hamiltonian in the LCAO basis.
-- Leveraging efficient Gaunt tensor products to couple the node and edge equivariant features.
-- Compensating for the lack of antisymmetric tensors in Gaunt tensor products via SO(2) convolution.
+- Leveraging efficient Gaunt tensor products (with or without local coordinate transformation) to couple the node and edge equivariant features.
+- Compensating for the lack of antisymmetric tensors in Gaunt tensor products via Clebsch-Gordan tensor product under local coordinate transformation(SO(2) convolution).
 
 ## Requirements
 ### Python
