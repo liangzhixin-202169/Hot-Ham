@@ -17,6 +17,21 @@ from entrypoints.Parameters import Parameters
 from utilities.neighbir_utilities import find_inverse_index
 
 
+def tensor2device(data, device):
+    if isinstance(data, torch.Tensor):
+        return data.to(device)
+    elif isinstance(data, dict):
+        for k, v in data.items():
+            data[k] = tensor2device(v, device)
+        return data
+    elif isinstance(data, list):
+        for i, e in enumerate(data):
+            data[i] = tensor2device(e, device)
+        return data
+    else:
+        return data
+
+
 class DataBase(ABC):
     def __init__(self, para, dataset):
         self.para = para
@@ -680,6 +695,14 @@ class OpenmxData(DataBase):
                 dataset.append(data.to(device=self.device))
 
         return dataset
+
+
+class HothamData(object):
+    def __init__(self, para: Union[dict, Parameters], dataset):
+        assert os.path.exists(dataset)
+        self.dataset = np.load(dataset)
+        self.device = para.device
+        self.dataset = tensor2device(self.dataset, self.device)
 
 
 if __name__ == "__main__":

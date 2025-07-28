@@ -9,6 +9,7 @@ from torch_geometric.data import Data
 import math
 from typing import Optional
 from .common import MCST, Gate, MyScatter
+from .EdgeSelfInteraction import EdgeSelfInteraction
 
 
 class SO2_0_linear(torch.nn.Module):
@@ -234,7 +235,7 @@ class SO2_wrap(torch.nn.Module):
 
 
 class SO2OutputLayer(torch.nn.Module):
-    def __init__(self, irreps_node: o3.Irreps, irreps_out: o3.Irreps,  num_type: int, basis_size=12, hidden_neurons=64, para=None, **kwargs):
+    def __init__(self, irreps_node: o3.Irreps, irreps_out: o3.Irreps,  num_type: int, basis_size=12, hidden_neurons=64, para=None, is_final_layer=True, **kwargs):
         super().__init__()
 
         self.irreps_node = irreps_node
@@ -243,6 +244,8 @@ class SO2OutputLayer(torch.nn.Module):
         self.split_stru = para.split_stru
         self.scatter = MyScatter(para.fix_average, para.N_average)
         self.irreps_sh = MCST(self.irreps_node.lmax, 1, 1)
+        self.para = para
+        self.is_final_layer = is_final_layer
 
         # self_connection
         self.sc_node = o3.FullyConnectedTensorProduct(self.irreps_node, o3.Irreps(f"{num_type}x0e"), self.irreps_out)
@@ -256,6 +259,16 @@ class SO2OutputLayer(torch.nn.Module):
         irreps_in = o3.Irreps([(mul*3, (l, p)) for mul, (l, p) in self.irreps_node])
 
         self.so2tp = SO2_wrap(irreps_in, self.irreps_sh, self.irreps_out, self.basis_size, shared_weights=True, edge_include_sc=para.edge_include_sc)
+
+        if self.para.edgeselfinteraction:
+            self.edgeselfinteraction = EdgeSelfInteraction(v_max=2,
+                                                           irreps_in=self.irreps_node,
+                                                           irreps_out=self.irreps_node,
+                                                           num_type=num_type,
+                                                           basis_size=self.basis_size,
+                                                           split_stru=self.para.split_stru,
+                                                           para=self.para)
+
         self.gate = Gate(irreps_in=self.so2tp.irreps_out)
 
         self.lin2_node = o3.Linear(irreps_in=self.so2tp.irreps_out, irreps_out=self.irreps_out)
@@ -295,6 +308,9 @@ class SO2OutputLayer(torch.nn.Module):
             f_edge = torch.cat(f_edge, dim=0)
         else:
             f_edge = self.so2tp(x=f_cat, sh=sh, length_emb=length_emb, wigner_D=data.wigner_D, mask_edge=data.mask_edge, mask_sc=data.mask_sc)
+
+        if self.para.edgeselfinteraction and (not self.is_final_layer):
+            f_node, f_edge = self.edgeselfinteraction(f_node, f_edge,  node_emb, length_emb, data)
 
         f_edge = self.gate(f_edge)
         f_node = self.scatter(f_edge, edge_dst, dim=0, dim_size=data.num_nodes)

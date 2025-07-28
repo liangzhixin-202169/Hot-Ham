@@ -23,8 +23,8 @@ class Parameters(dict):
 
         default_dict["lambda_2"] = 0
 
-        default_dict["intdtype"] = torch.int32,
-        default_dict["floatdtype"] = torch.float32,
+        default_dict["intdtype"] = torch.int32
+        default_dict["floatdtype"] = torch.float32
         default_dict["device"] = "cpu"
         default_dict["band_min"] = None
         default_dict["band_max"] = None
@@ -39,6 +39,7 @@ class Parameters(dict):
         default_dict["testset"] = None
         default_dict["edge_include_sc"] = True
         default_dict["shuffle"] = False
+        default_dict["dft"] = None
 
         # Model init and save
         default_dict["init_from_model"] = None

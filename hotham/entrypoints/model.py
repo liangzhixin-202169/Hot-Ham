@@ -6,6 +6,7 @@ from e3nn import o3
 from .Parameters import Parameters
 from modules.Embedding import NodeEmbedding, EdgeEmbedding
 from modules.SO2Conv import SO2OutputLayer
+from modules.SelfInteraction import SelfInteraction
 from modules.common import MCST, E3LayerNormal, MyScatter
 from modules.OutputLinear import OutputLinear
 from .basemodel import BaseModel
@@ -52,18 +53,23 @@ class Model(BaseModel):
             LayerNorm_node, LayerNorm_edge = torch.nn.ModuleList([]), torch.nn.ModuleList([])
         GauntConv_layer = torch.nn.ModuleList([])
 
-        if para.model_type == 0:
-            from modules.GConv0 import GauntConvelution
+        if para.model_type == -1:
+            from modules.E3Conv import E3Convolution as GeneralConvolution
+        elif para.model_type == 0:
+            from modules.GConv0 import GauntConvolution as GeneralConvolution
         elif para.model_type == 1:
-            from modules.GConv1 import GauntConvelution
+            from modules.GConv1 import GauntConvolution as GeneralConvolution
+        elif para.model_type == 2:
+            from modules.SO2Conv import SO2OutputLayer as GeneralConvolution
         for layer_index in range(self.convblock_num):
-            layer = GauntConvelution(irreps_node=self.layer_irreps[layer_index],
-                                     irreps_out=self.layer_irreps[layer_index+1],
-                                     num_type=self.num_atomtype,
-                                     basis_size=self.basis_size,
-                                     sh_channel=1,
-                                     split_stru=self.para.split_stru,
-                                     para=para)
+            layer = GeneralConvolution(irreps_node=self.layer_irreps[layer_index],
+                                       irreps_out=self.layer_irreps[layer_index+1],
+                                       num_type=self.num_atomtype,
+                                       basis_size=self.basis_size,
+                                       sh_channel=1,
+                                       split_stru=self.para.split_stru,
+                                       is_final_layer=False,
+                                       para=para)
             GauntConv_layer.append(layer)
 
             if self.using_layernorm:
@@ -85,6 +91,33 @@ class Model(BaseModel):
             self.LayerNorm_node = LayerNorm_node
             self.LayerNorm_edge = LayerNorm_edge
 
+        # self interaction
+        if self.para.using_manybody:
+            manybody_layer = torch.nn.ModuleList([])
+
+            # before Gaunt Conv
+            for layer_index in range(self.convblock_num):
+                layer = SelfInteraction(v_max=self.para.v_max,
+                                        irreps_in=GauntConv_layer[layer_index].irreps_node,
+                                        irreps_out=GauntConv_layer[layer_index].irreps_node,
+                                        num_type=self.num_atomtype,
+                                        basis_size=self.basis_size,
+                                        split_stru=self.para.split_stru,
+                                        para=self.para)
+                manybody_layer.append(layer)
+
+            # before SO(2) conv
+            layer = SelfInteraction(v_max=self.para.v_max,
+                                    irreps_in=self.so2outputlayer.irreps_node,
+                                    irreps_out=self.so2outputlayer.irreps_node,
+                                    num_type=self.num_atomtype,
+                                    basis_size=self.basis_size,
+                                    split_stru=self.para.split_stru,
+                                    para=self.para)
+            manybody_layer.append(layer)
+            self.manybody_layer = manybody_layer
+
+        # readout
         if para.using_rearrangement_linear:
             self.node_endlinear = OutputLinear(self.so2outputlayer.irreps_out, self.edge_irreps_output)
             self.edge_endlinear = OutputLinear(self.so2outputlayer.irreps_out, self.edge_irreps_output)
@@ -107,8 +140,12 @@ class Model(BaseModel):
         f_edge = self.f_edge_lin(sh_emb, weight_f)
         f_node = self.scatter(f_edge, edge_dst, dim=0, dim_size=data.num_nodes)
 
-        # Gaunt Conv
+        # General Conv
         for index_layer, fclayer in enumerate(self.GauntConv_layer):
+
+            if self.para.using_manybody:
+                f_node, f_edge = self.manybody_layer[index_layer](f_node, f_edge,  node_emb, edge_emb, data)
+
             f_node, f_edge = fclayer(f_node, f_edge, sh_emb, node_emb, edge_emb, data)
             if self.using_layernorm:
                 layerNorm_node = self.LayerNorm_node[index_layer]
@@ -120,6 +157,8 @@ class Model(BaseModel):
                     f_edge = layerNorm_edge(f_edge, data.batch[edge_src])
 
         # SO2 Conv
+        if self.para.using_manybody:
+            f_node, f_edge = self.manybody_layer[-1](f_node, f_edge,  node_emb, edge_emb, data)
         f_node, f_edge = self.so2outputlayer(f_node, f_edge, sh_emb, node_emb, edge_emb, data)
 
         if self.using_layernorm:
@@ -151,12 +190,18 @@ class Model(BaseModel):
 
         # # Gaunt Conv
         # for index_layer, fclayer in enumerate(self.GauntConv_layer):
+
+        #     if self.para.using_manybody:
+        #         f_node_rotated, f_edge_rotated = self.manybody_layer[index_layer](f_node_rotated, f_edge_rotated,  node_emb, edge_emb, data)
+
         #     f_node_rotated, f_edge_rotated = fclayer(f_node_rotated, f_edge_rotated, sh_emb_rotated, node_emb, edge_emb, data)
         #     if self.using_layernorm:
         #         f_node_rotated = self.LayerNorm_node[index_layer](f_node_rotated)
         #         f_edge_rotated = self.LayerNorm_edge[index_layer](f_edge_rotated)
 
         # # SO2 Conv
+        # if self.para.using_manybody:
+        #     f_node_rotated, f_edge_rotated = self.manybody_layer[-1](f_node_rotated, f_edge_rotated,  node_emb, edge_emb, data)
         # f_node_rotated, f_edge_rotated = self.so2outputlayer(f_node_rotated, f_edge_rotated, sh_emb_rotated, node_emb, edge_emb, data)
 
         # if self.using_layernorm:

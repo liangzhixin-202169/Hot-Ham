@@ -1,4 +1,5 @@
 import math
+from tkinter import N
 import numpy as np
 import torch
 from torch.fft import fft, ifft, fft2, ifft2
@@ -9,12 +10,13 @@ import os
 import e3nn
 from e3nn import o3
 from .common import MCST, Gate, E3LayerNormal, MyScatter
+from .EdgeSelfInteraction import EdgeSelfInteraction
 
 __all__ = ["GauntTensorProduct", "GauntTensorProduct_LCT", "GauntConvelution"]
 
 
 class GauntTensorProduct(torch.nn.Module):
-    """general Gaunt tensor product (2D-FB)"""
+    """TODO: implement general Gaunt tensor product (2D-FB)"""
 
     def __init__(self,
                  irreps_in1: Union[o3.Irreps, List[o3.Irreps]],
@@ -373,7 +375,7 @@ class GauntTensorProduct_LCT(torch.nn.Module):
         return iml, ciuv, cuvi, rciuv, fciuv, hciuv, rcuvi
 
 
-class GauntConvelution(torch.nn.Module):
+class GauntConvolution(torch.nn.Module):
     def __init__(self, irreps_node: o3.Irreps, irreps_out: o3.Irreps,  num_type: int, basis_size=12, sh_channel=None, hidden_neurons=64, split_stru=0, para=None, **kwargs):
         super().__init__()
         self.irreps_node = irreps_node
@@ -383,6 +385,7 @@ class GauntConvelution(torch.nn.Module):
         self.split_stru = split_stru
         self.using_layernorm2 = para.using_layernorm2
         self.scatter = MyScatter(para.fix_average, para.N_average)
+        self.para = para
 
         ##############################################################################################################################################
         # Split irreps_in and irreps_out according to even and parity, such that irreps == "Cex0e+Cex1o+Cex2e+..." + "Cox0o+Cox1e+Cox2o+...".
@@ -424,6 +427,15 @@ class GauntConvelution(torch.nn.Module):
                                                      self.gtp.weight_numel],
                                                     torch.nn.functional.silu)
 
+        if self.para.edgeselfinteraction:
+            self.edgeselfinteraction = EdgeSelfInteraction(v_max=2,
+                                                           irreps_in=self.irreps_node,
+                                                           irreps_out=self.irreps_node,
+                                                           num_type=num_type,
+                                                           basis_size=self.basis_size,
+                                                           split_stru=self.para.split_stru,
+                                                           para=self.para)
+
         if self.using_layernorm2:
             self.layernorm = E3LayerNormal(self.irreps_out)
 
@@ -460,6 +472,9 @@ class GauntConvelution(torch.nn.Module):
             f_edge = torch.cat(f_edge, dim=0)
         else:
             f_edge = self.gtp(f_cat, sh, weight, data.wigner_D, data.mask_edge, data.mask_sc)
+
+        if self.para.edgeselfinteraction:
+            f_node, f_edge = self.edgeselfinteraction(f_node, f_edge,  node_emb, length_emb, data)
 
         if self.using_layernorm2:
             f_edge = self.layernorm(f_edge)

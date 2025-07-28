@@ -2,7 +2,7 @@ import torch
 from torch_geometric.loader import DataLoader
 from typing import Union
 from entrypoints.Parameters import Parameters
-from .Dataset import AbacusData, OpenmxData
+from .Dataset import AbacusData, OpenmxData, HothamData
 
 
 class DatasetPrepocess:
@@ -11,6 +11,8 @@ class DatasetPrepocess:
             DATACLASS = AbacusData
         elif para.dft == "openmx":
             DATACLASS = OpenmxData
+        elif para.dft is None:
+            DATACLASS = HothamData
 
         for dataset in ["trainset", "valset", "testset"]:
             if para[dataset] is not None:

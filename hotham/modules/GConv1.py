@@ -361,7 +361,7 @@ class GauntTensorProduct_LCT(torch.nn.Module):
         return iml, ciuv, cuvi, rciuv, fciuv, hciuv, rcuvi
 
 
-class GauntConvelution(torch.nn.Module):
+class GauntConvolution(torch.nn.Module):
     def __init__(self, irreps_node: o3.Irreps, irreps_out: o3.Irreps,  num_type: int, basis_size=12, sh_channel=None, hidden_neurons=64, split_stru=0, para=None):
         super().__init__()
         self.irreps_node = irreps_node

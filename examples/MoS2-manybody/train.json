@@ -1,0 +1,71 @@
+{
+    // dataset
+    "trainset": "./data/trainset",
+    // "valset": "./data/valset",
+    // "testset": "./data/testset",
+    "train_target": "hamiltonian",
+    "dft": "openmx",
+    "orbit": {
+        "Mo": [
+            "4s",
+            "5s",
+            "6s",
+            "4p",
+            "5p",
+            "4d",
+            "5d"
+        ],
+        "S": [
+            "3s",
+            "4s",
+            "3p",
+            "4p",
+            "3d"
+        ]
+    },
+    // train
+    "optimizer": "AdamW",
+    "lambda_2": 0.0,
+    "lr_scheduler": "ReduceLROnPlateau",
+    "factor": 0.9,
+    "patience": 50,
+    "threshold": 0.5,
+    "lr": 0.02,
+    "epoch": 3000,
+    "gamma": 0.999,
+    "batch_size": 1,
+    "seed": 2024,
+    "prediction": 0,
+    "intdtype": "int64",
+    "floatdtype": "float32",
+    "complexdtype": "complex64",
+    "device": "cpu",
+    "model_save_path": ".",
+    "checkpoint_interval": 250,
+    // model
+    "model_type": -1,
+    "rc": 7.5,
+    "basis_size": 32,
+    "L_max": 8,
+    "using_layernorm": true,
+    "using_layernorm2": false,
+    "restrict_last_out": true,
+    "using_rearrangement_linear": true,
+    "Ce": [
+        4,
+        4,
+        4,
+        8
+    ],
+    "Co": [
+        0,
+        0,
+        0,
+        8
+    ],
+    "edge_include_sc": true,
+    "using_CoordinateTransformation": true,
+    "using_manybody": false,
+    "v_max": 4,
+    "edgeselfinteraction": false
+}
