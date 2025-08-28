@@ -13,8 +13,38 @@ from typing import Union, List
 from abc import ABC
 import h5py
 from e3nn import o3
-from entrypoints.Parameters import Parameters
-from utilities.neighbir_utilities import find_inverse_index
+
+
+def find_inverse_index(I, J, S):
+    index_inv = {}
+    for index in range(len(I)):
+        i, j = I[index], J[index]
+        s1, s2, s3 = S[index]
+        ijs = (i, j, s1, s2, s3)
+        ijs_inv = (j, i, -s1, -s2, -s3)
+
+        index_inv[ijs] = [index]+index_inv.setdefault(ijs, [])
+        index_inv[ijs_inv] = index_inv.setdefault(ijs_inv, [])+[index]
+
+    return np.array(sorted(index_inv.values()))[:, 1]
+
+
+def numpy2tensor(data, device):
+    if isinstance(data, np.ndarray):
+        return torch.from_numpy(data).to(device)
+    elif isinstance(data, dict):
+        for k, v in data.items():
+            data[k] = numpy2tensor(v, device)
+        return data
+    elif isinstance(data, list):
+        for i, e in enumerate(data):
+            data[i] = numpy2tensor(e, device)
+        return data
+    elif isinstance(data, Data):
+        data = data.to(torch.device(device))
+        return data
+    else:
+        return data
 
 
 def tensor2device(data, device):
@@ -28,11 +58,42 @@ def tensor2device(data, device):
         for i, e in enumerate(data):
             data[i] = tensor2device(e, device)
         return data
-    elif isinstance(data, Data):
-        data = data.to(torch.device(device))
-        return data
     else:
         return data
+
+
+class Parameters(dict):
+    def __init__(self, para: dict):
+        super().__init__()
+        self.update(self.set_default_parameters())
+        self.update(para)
+        self.atomic_numbers = [ase.data.atomic_numbers[ele] for ele in self.orbit.keys()]
+        self.num_types = len(self.atomic_numbers)
+
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(f"'Parameters' object has no attribute '{key}'")
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+    def set_default_parameters(self):
+        default_dict = {}
+        # Set dtype and device
+        default_dict["intdtype"] = torch.int64
+        default_dict["floatdtype"] = torch.float32
+        default_dict["device"] = "cpu"
+        # Dataset path
+        default_dict["trainset"] = None
+        default_dict["valset"] = None
+        default_dict["testset"] = None
+        default_dict["dft"] = None
+        default_dict["edge_include_sc"] = True
+        # Data preprocess
+        default_dict["using_CoordinateTransformation"] = True
+        return default_dict
 
 
 class DataBase(ABC):
@@ -67,7 +128,9 @@ class DataBase(ABC):
     def get_wigner_Ds(self, lmax, edge_vec):
         # edge_vec should be yzx order
         # R@((0,1,0).T) = (y,z,x).T
-        self._Jd = torch.load(os.path.join(os.path.dirname(__file__), "../utilities/Jd.pt"))
+        # self._Jd = torch.load(os.path.join(os.path.dirname(__file__), "../utilities/Jd.pt"))
+        # self._Jd = torch.load("D:/Users/17183/repo/hotham-mace/Hot-Ham/hotham/utilities/Jd.pt")
+        self._Jd = torch.load("/fs08/home/js_liangzx/anaconda3/envs/deep/apps/hotham/utilities/Jd.pt")
         alpha, beta = o3.xyz_to_angles(edge_vec)
         wigner_D = [[] for _ in range(lmax+1)]
         for l in range(lmax+1):
@@ -100,7 +163,7 @@ class DataBase(ABC):
 
 
 class AbacusData(DataBase):
-    def __init__(self, para: Union[dict, Parameters], dataset):
+    def __init__(self, para: dict, dataset):
         super().__init__(para, dataset)
         self.device = para.device
         self.target = para.train_target
@@ -365,7 +428,14 @@ class OpenmxData(DataBase):
                           [0, 0, 0, 0, 1],
                           [1, 0, 0, 0, 0],
                           [0, 0, 0, 1, 0],
-                          [0, 1, 0, 0, 0]], dtype=self.floatdtype, device=self.device)
+                          [0, 1, 0, 0, 0]], dtype=self.floatdtype, device=self.device),
+            torch.tensor([[0, 0, 0, 1, 0, 0, 0],
+                          [0, 0, 0, 0, 1, 0, 0],
+                          [0, 0, 1, 0, 0, 0, 0],
+                          [0, 0, 0, 0, 0, 1, 0],
+                          [0, 1, 0, 0, 0, 0, 0],
+                          [0, 0, 0, 0, 0, 0, 1],
+                          [1, 0, 0, 0, 0, 0, 0]], dtype=self.floatdtype, device=self.device)
         ]
 
         if isinstance(order, int):
@@ -700,13 +770,85 @@ class OpenmxData(DataBase):
         return dataset
 
 
-class HothamData(object):
+class GraphData(DataBase):
     def __init__(self, para: Union[dict, Parameters], dataset):
-        assert os.path.exists(dataset)
-        self.dataset = torch.load(dataset, weights_only=False)
+        super().__init__(para, dataset)
         self.device = para.device
-        self.dataset = tensor2device(self.dataset, self.device)
+        self.dataset = self.get_graph()
+
+        if self.para.using_CoordinateTransformation:
+            for data in self.dataset:
+                data.wigner_D = self.get_wigner_Ds(self.para.L_max, data.D_hop[:, [1, 2, 0]])
+                if self.para.edge_include_sc:
+                    data.mask_edge = (data.d_hop > 1.0e-6)
+                    data.mask_sc = ~data.mask_edge
+                    for index in range(len(data.wigner_D)):
+                        data.wigner_D[index][data.mask_sc] = torch.eye(2*index+1, dtype=data.wigner_D[index].dtype, device=data.wigner_D[index].device).unsqueeze(0)
+
+    def get_graph(self):
+        dataset = []
+
+        for root, _, files in os.walk(self.dataset):
+            if "model.xyz" in files:
+                structure_file = os.path.join(root, "model.xyz")
+                frame = read(structure_file)
+
+                AtomType = torch.tensor([self.AtomNumber_to_AtomType[atomnumber] for atomnumber in frame.numbers])
+                lattice = torch.from_numpy(np.array(frame.cell))
+                pos = torch.from_numpy(frame.positions)
+
+                cutoff = [self.para.cutoff[symbol]*Bohr for symbol in frame.get_chemical_symbols()]
+                _, _, d, D, S, edge_index, edge_inverse = self.find_neigbhor(frame=frame, cutoff=cutoff)
+
+                data = Data(
+                    AtomType=AtomType,
+                    lattice=lattice,
+                    pos=pos.to(self.floatdtype),
+                    edge_index_hop=edge_index.to(self.intdtype),
+                    d_hop=d.to(self.floatdtype),
+                    D_hop=D.to(self.floatdtype),
+                    S_hop=S.to(self.intdtype),
+                    edge_inverse=edge_inverse.to(self.intdtype)
+                )
+
+                dataset.append(data)
+        return dataset
 
 
 if __name__ == "__main__":
-    pass
+    inputfile = {
+        # "trainset": ,
+        # "valset": ,
+        "testset": "/fs08/home/js_liangzx/anaconda3/envs/deep/neptb/dataset/GTB/openmx-water5/getdata/data/valset",
+        "train_target": "hamiltonian",
+        "dft": "openmx",
+        "orbit": {
+            "H": [
+                "1s",
+                "2s",
+                "2p"
+            ],
+            "O": [
+                "1s",
+                "2s",
+                "2p",
+                "3p",
+                "3d"
+            ]
+        },
+        "rc": 7.5,
+        "L_max": 5
+    }
+
+    param = Parameters(inputfile)
+    if param.dft == "abacus":
+        DATACLASS = AbacusData
+    elif param.dft == "openmx":
+        DATACLASS = OpenmxData
+    elif param.dft is None:
+        DATACLASS = GraphData
+
+    for dataset in ["trainset", "valset", "testset"]:
+        if param[dataset] is not None:
+            data = DATACLASS(param, param[dataset])
+            torch.save(tensor2device(data.dataset, "cpu"), dataset+".pth")

@@ -29,6 +29,7 @@ class Input_Calc(dict):
 
         default_dict["testset"] = None
         default_dict["valset"] = None
+        default_dict["dft"] = None
         default_dict["shuffle"] = False
 
         return default_dict

@@ -47,7 +47,7 @@ class Kernel(torch.nn.Module):
                 self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode="min", factor=self.para.factor, patience=self.para.patience, threshold=para.threshold)
 
             if self.para.init_from_checkpoint is not None:
-                checkpoint = torch.load(self.para.init_from_checkpoint)
+                checkpoint = torch.load(self.para.init_from_checkpoint, map_location=self.para.device)
                 self.start_epoch = checkpoint['epoch']
                 checkpoint_weights = self.Version_Convertion(checkpoint['model_state_dict'], self.model.state_dict())
                 # init_state = {k: v for k, v in checkpoint['model_state_dict'].items() if k in self.model.state_dict()}
@@ -234,6 +234,9 @@ class Kernel(torch.nn.Module):
 
         for key in current_keys:
             if "N_average" in key:
-                current_version[key] = old_version["N_average"]
+                try:
+                    current_version[key] = old_version["N_average"]
+                except:
+                    continue
 
         return current_version

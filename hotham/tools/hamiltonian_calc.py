@@ -62,8 +62,25 @@ class Hamiltonian_Calc(Base_Calc):
 if __name__ == "__main__":
     import sys
     import json5
+    from time import time
+
+    def device_synchronize(input: dict):
+        if input["device"] == "cuda":
+            torch.cuda.synchronize()
+
     assert os.path.exists(sys.argv[1])
     with open(sys.argv[1], "r") as f:
         inputfile = json5.load(f)
+
+    device_synchronize(input)
+    time_begin = time()
     hamil_calc = Hamiltonian_Calc(inputfile)
+    device_synchronize(input)
+    time_finish = time()
+    print("-"*50+f"\nTime used for initialization = {time_finish-time_begin:.3f} s.\n"+"-"*50)
+
+    device_synchronize(input)
+    time_begin = time()
     hamil_calc.run()
+    time_finish = time()
+    print("-"*50+f"\nTime used for hamiltonian calculation = {time_finish-time_begin:.3f} s.\n"+"-"*50)

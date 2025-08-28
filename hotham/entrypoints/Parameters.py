@@ -23,7 +23,7 @@ class Parameters(dict):
 
         default_dict["lambda_2"] = 0
 
-        default_dict["intdtype"] = torch.int32
+        default_dict["intdtype"] = torch.int64
         default_dict["floatdtype"] = torch.float32
         default_dict["device"] = "cpu"
         default_dict["band_min"] = None
