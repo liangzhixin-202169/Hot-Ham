@@ -72,14 +72,14 @@ if __name__ == "__main__":
     with open(sys.argv[1], "r") as f:
         inputfile = json5.load(f)
 
-    device_synchronize(input)
+    device_synchronize(inputfile)
     time_begin = time()
     hamil_calc = Hamiltonian_Calc(inputfile)
-    device_synchronize(input)
+    device_synchronize(inputfile)
     time_finish = time()
     print("-"*50+f"\nTime used for initialization = {time_finish-time_begin:.3f} s.\n"+"-"*50)
 
-    device_synchronize(input)
+    device_synchronize(inputfile)
     time_begin = time()
     hamil_calc.run()
     time_finish = time()

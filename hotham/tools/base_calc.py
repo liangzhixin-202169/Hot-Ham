@@ -46,7 +46,10 @@ class Base_Calc(object):
 
         for key in current_keys:
             if "N_average" in key:
-                current_version[key] = old_version["N_average"]
+                try:
+                    current_version[key] = old_version["N_average"]
+                except:
+                    continue
 
         return current_version
 
