@@ -34,7 +34,7 @@ Hot-Ham supports ABACUS and OpenMX.
 ### Train
 Hot-Ham can be trained with:
 ```shell
-hotham/entrypoints/main.py train.json
+hotham train.json
 ```
 
 ## 5.Reference
