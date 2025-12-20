@@ -18,8 +18,8 @@ setup(
         "numpy",     
         "pyyaml",
         "torch>=2.4.0",
-        "torch_geometric >= 2.4.0",
-        "e3nn = 0.5.1",
+        "torch_geometric>=2.4.0",
+        "e3nn==0.5.1",
         "ase",
         "h5py"
     ],
