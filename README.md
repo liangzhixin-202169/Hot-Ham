@@ -20,7 +20,7 @@ The python version is recommended to be larger than 3.8.5, with following packag
 ### **Hot-Ham** installation
 You can use pip:
 ```shell
-pip install https://github.com/liangzhixin-202169/Hot-Ham.git
+pip install git+https://github.com/liangzhixin-202169/Hot-Ham.git
 ```
 
 ### Interface
