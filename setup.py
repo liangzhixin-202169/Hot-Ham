@@ -15,13 +15,13 @@ setup(
     packages=find_packages(),
     python_requires=">=3.8.5",
     install_requires=[
-        "numpy",     
-        "pyyaml",
+        "numpy==2.2.6",
         "torch>=2.4.0",
         "torch_geometric>=2.4.0",
+        "torch_scatter>=2.1.1",
         "e3nn==0.5.1",
-        "ase",
-        "h5py"
+        "ase==3.25.0",
+        "h5py==3.14.0"
     ],
     license="MIT",
     description="Hot-Ham: High-order Tensor machine-learning Hamiltonian",
