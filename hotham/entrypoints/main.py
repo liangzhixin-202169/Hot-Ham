@@ -13,7 +13,14 @@ def device_synchronize(input: dict):
         torch.cuda.synchronize()
 
 
-def main(input: dict):
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('inputfile', type=str)
+    args = parser.parse_args()
+
+    assert os.path.exists(args.inputfile)
+    with open(args.inputfile, "r") as f:
+        input = json5.load(f)
 
     if input.get("seed", None) != None:
         set_seed(input["seed"])
@@ -35,12 +42,4 @@ def main(input: dict):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('inputfile', type=str)
-    args = parser.parse_args()
-
-    assert os.path.exists(args.inputfile)
-    with open(args.inputfile, "r") as f:
-        inputfile = json5.load(f)
-
-    main(inputfile)
+    main()
