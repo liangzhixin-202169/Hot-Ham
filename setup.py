@@ -18,10 +18,10 @@ setup(
         "numpy==2.2.6",
         "torch>=2.4.0",
         "torch_geometric>=2.4.0",
-        "torch_scatter>=2.1.1",
         "e3nn==0.5.1",
         "ase==3.25.0",
-        "h5py==3.14.0"
+        "h5py==3.14.0",
+        "tqdm"
     ],
     license="MIT",
     description="Hot-Ham: High-order Tensor machine-learning Hamiltonian",
