@@ -1,5 +1,5 @@
 import torch
-from Parameters import Parameters
+from ..entrypoints.Parameters import Parameters
 
 
 class LossRecord():

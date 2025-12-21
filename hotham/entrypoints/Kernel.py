@@ -1,9 +1,9 @@
 import torch
 import os
 import sys
-from entrypoints.Parameters import Parameters
-from entrypoints.Lossfun import LossRecord, Lossfunction
-from data.DatasetPreprocess import DatasetPrepocess
+from ..entrypoints.Parameters import Parameters
+from ..entrypoints.Lossfun import LossRecord, Lossfunction
+from ..data.DatasetPreprocess import DatasetPrepocess
 
 
 class Kernel(torch.nn.Module):
@@ -32,9 +32,9 @@ class Kernel(torch.nn.Module):
             self.lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=para.gamma)
         else:
             if para.prediction == 2:
-                from entrypoints.model_profile import Model
+                from ..entrypoints.model_profile import Model
             else:
-                from entrypoints.model import Model
+                from ..entrypoints.model import Model
 
             self.model = Model(para=para)
             self.model.to(device=self.device)

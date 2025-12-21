@@ -3,9 +3,9 @@ import argparse
 import json5
 from time import time
 import torch
-from entrypoints.Parameters import Parameters
-from entrypoints.Kernel import Kernel
-from utilities.seed import set_seed
+from ..entrypoints.Parameters import Parameters
+from ..entrypoints.Kernel import Kernel
+from ..utilities.seed import set_seed
 
 
 def device_synchronize(input: dict):

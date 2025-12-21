@@ -1,7 +1,7 @@
 import torch
 from torch_geometric.loader import DataLoader
 from typing import Union
-from entrypoints.Parameters import Parameters
+from ..entrypoints.Parameters import Parameters
 from .Dataset import AbacusData, OpenmxData, HothamData
 
 

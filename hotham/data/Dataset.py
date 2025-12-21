@@ -13,8 +13,8 @@ from typing import Union, List
 from abc import ABC
 import h5py
 from e3nn import o3
-from entrypoints.Parameters import Parameters
-from utilities.neighbir_utilities import find_inverse_index
+from ..entrypoints.Parameters import Parameters
+from ..utilities.neighbir_utilities import find_inverse_index
 
 
 def tensor2device(data, device):

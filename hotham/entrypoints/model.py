@@ -4,10 +4,10 @@ from typing import Union
 import e3nn
 from e3nn import o3
 from .Parameters import Parameters
-from modules.Embedding import NodeEmbedding, EdgeEmbedding
-from modules.SO2Conv import SO2OutputLayer
-from modules.common import MCST, E3LayerNormal, MyScatter
-from modules.OutputLinear import OutputLinear
+from ..modules.Embedding import NodeEmbedding, EdgeEmbedding
+from ..modules.SO2Conv import SO2OutputLayer
+from ..modules.common import MCST, E3LayerNormal, MyScatter
+from ..modules.OutputLinear import OutputLinear
 from .basemodel import BaseModel
 
 
