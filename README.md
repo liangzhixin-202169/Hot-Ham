@@ -9,13 +9,15 @@
 
 ## 3.Requirements
 ### Python
-The python version is recommended to be larger than 3.8.5, with following packages:
-- Numpy
-- Pytorch >= 1.10.2
-- torch_geometric >= 2.4.0
-- e3nn = 0.5.1
-- ASE
+The python version is recommended to be larger than 3.10, with following packages:
+- numpy
+- torch
+- torch_geometric
+- e3nn
+- ase
 - h5py
+- json5
+- tqdm
 
 ### **Hot-Ham** installation
 You can use pip:
