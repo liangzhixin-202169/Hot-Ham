@@ -29,4 +29,12 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     entry_points={"console_scripts": ["hotham = hotham.entrypoints.main:main"]},
+
+    include_package_data=True,
+    package_data={
+        "hotham": [
+            "utilities/*.pt",
+            "utilities/*.npy",
+        ]
+    },
 )
