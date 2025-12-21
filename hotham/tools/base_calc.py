@@ -31,6 +31,8 @@ class Base_Calc(object):
         current_keys = current_version.keys()
         for key in old_keys:
             if key not in current_keys:
+                if "N_average" in key:
+                    continue
                 words = key.split(".")
                 new_words = []
                 for word in words:
@@ -44,7 +46,10 @@ class Base_Calc(object):
 
         for key in current_keys:
             if "N_average" in key:
-                current_version[key] = old_version["N_average"]
+                try:
+                    current_version[key] = old_version["N_average"]
+                except:
+                    continue
 
         return current_version
 

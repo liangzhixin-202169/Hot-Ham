@@ -53,17 +53,17 @@ class Model(BaseModel):
         GauntConv_layer = torch.nn.ModuleList([])
 
         if para.model_type == 0:
-            from modules.GConv0 import GauntConvelution
+            from modules.GConv0 import GauntConvolution as GeneralConvolution
         elif para.model_type == 1:
-            from modules.GConv1 import GauntConvelution
+            from modules.GConv1 import GauntConvolution as GeneralConvolution
         for layer_index in range(self.convblock_num):
-            layer = GauntConvelution(irreps_node=self.layer_irreps[layer_index],
-                                     irreps_out=self.layer_irreps[layer_index+1],
-                                     num_type=self.num_atomtype,
-                                     basis_size=self.basis_size,
-                                     sh_channel=1,
-                                     split_stru=self.para.split_stru,
-                                     para=para)
+            layer = GeneralConvolution(irreps_node=self.layer_irreps[layer_index],
+                                      irreps_out=self.layer_irreps[layer_index+1],
+                                      num_type=self.num_atomtype,
+                                      basis_size=self.basis_size,
+                                      sh_channel=1,
+                                      split_stru=self.para.split_stru,
+                                      para=para)
             GauntConv_layer.append(layer)
 
             if self.using_layernorm:

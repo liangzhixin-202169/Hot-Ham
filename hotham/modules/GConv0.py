@@ -14,7 +14,7 @@ __all__ = ["GauntTensorProduct", "GauntTensorProduct_LCT", "GauntConvelution"]
 
 
 class GauntTensorProduct(torch.nn.Module):
-    """general Gaunt tensor product (2D-FB)"""
+    """TODO: implement general Gaunt tensor product (2D-FB)"""
 
     def __init__(self,
                  irreps_in1: Union[o3.Irreps, List[o3.Irreps]],
@@ -250,7 +250,7 @@ class GauntTensorProduct_LCT(torch.nn.Module):
 
             pout_size = irreps_out[index].dim
             parity_out_slice.append(slice(pout0_size, pout0_size+pout_size))
-            pout_size += pout_size
+            pout0_size += pout_size
 
             cin_size = self.input1_channels[index]
             channel_in_slice.append(slice(cin0_size, cin0_size+cin_size))
@@ -383,6 +383,7 @@ class GauntConvelution(torch.nn.Module):
         self.split_stru = split_stru
         self.using_layernorm2 = para.using_layernorm2
         self.scatter = MyScatter(para.fix_average, para.N_average)
+        self.para = para
 
         ##############################################################################################################################################
         # Split irreps_in and irreps_out according to even and parity, such that irreps == "Cex0e+Cex1o+Cex2e+..." + "Cox0o+Cox1e+Cox2o+...".

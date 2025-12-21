@@ -239,7 +239,7 @@ class GauntTensorProduct_LCT(torch.nn.Module):
 
             pout_size = irreps_out[index].dim
             parity_out_slice.append(slice(pout0_size, pout0_size+pout_size))
-            pout_size += pout_size
+            pout0_size += pout_size
 
             cin_size = self.input1_channels[index]
             channel_in_slice.append(slice(cin0_size, cin0_size+cin_size))
@@ -361,7 +361,7 @@ class GauntTensorProduct_LCT(torch.nn.Module):
         return iml, ciuv, cuvi, rciuv, fciuv, hciuv, rcuvi
 
 
-class GauntConvelution(torch.nn.Module):
+class GauntConvolution(torch.nn.Module):
     def __init__(self, irreps_node: o3.Irreps, irreps_out: o3.Irreps,  num_type: int, basis_size=12, sh_channel=None, hidden_neurons=64, split_stru=0, para=None):
         super().__init__()
         self.irreps_node = irreps_node
