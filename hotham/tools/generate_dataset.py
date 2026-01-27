@@ -6,12 +6,13 @@ import ase
 from ase.data import atomic_numbers
 from ase.io import read
 from ase.neighborlist import neighbor_list
-from ase.units import Hartree, Bohr
+from ase.units import Hartree, Rydberg, Bohr
 import os
 import re
 from typing import Union, List
 from abc import ABC
 import h5py
+from io import TextIOWrapper
 from e3nn import o3
 
 
@@ -28,6 +29,13 @@ def find_inverse_index(I, J, S):
 
     return np.array(sorted(index_inv.values()))[:, 1]
 
+def find_cell_shfit_index(S):
+    unique_S = np.unique(S, axis=0)
+    unique_S_tuple = [tuple(s.tolist()) for s in unique_S]
+    unique_S_tuple_sort = sorted(unique_S_tuple)
+    mapping = {s: i for i, s in enumerate(unique_S_tuple_sort)}
+    S_index = np.array([mapping[tuple(s.tolist())] for s in S])
+    return unique_S, S_index
 
 def numpy2tensor(data, device):
     if isinstance(data, np.ndarray):
@@ -112,6 +120,7 @@ class DataBase(ABC):
         self.AtomSymbol_to_AtomType = {self.AtomNumber_to_AtomSymbol[atomnumber]: atomtype for atomnumber, atomtype in self.AtomNumber_to_AtomType.items()}
         self.AtomType_to_AtomNumber = {atomtype: atomnumber for atomnumber, atomtype in self.AtomNumber_to_AtomType.items()}
         self.AtomType_to_AtomSymbol = {atomtype: self.AtomNumber_to_AtomSymbol[atomnumber] for atomnumber, atomtype in self.AtomNumber_to_AtomType.items()}
+        self.n_type = len(self.AtomType_to_AtomSymbol)
 
         self.AMSymbol_to_AM = {"s": 0, "p": 1, "d": 2, "f": 3, "g": 4}
         self.AtomType_AMSymbolList = {self.AtomSymbol_to_AtomType[k]: list(map(lambda x: ''.join(re.findall(r'[A-Za-z]', x)), v)) for k, v in para.orbit.items()}
@@ -163,14 +172,9 @@ class DataBase(ABC):
 
 
 class AbacusData(DataBase):
-    def __init__(self, para: dict, dataset):
+    def __init__(self, para: dict, dataset: str):
         super().__init__(para, dataset)
-        self.device = para.device
-        self.target = para.train_target
-        if self.target == "hamiltonian":
-            self.dataset = self.Hamilton()
-        elif self.target == "band":
-            self.dataset = self.Band()
+        self.dataset = self.get_data()
 
         if self.para.using_CoordinateTransformation:
             for data in self.dataset:
@@ -181,20 +185,107 @@ class AbacusData(DataBase):
                     for index in range(len(data.wigner_D)):
                         data.wigner_D[index][data.mask_sc] = torch.eye(2*index+1, dtype=data.wigner_D[index].dtype, device=data.wigner_D[index].device).unsqueeze(0)
 
+    @staticmethod
+    def read_real(fid: TextIOWrapper):
+        return list(map(float, fid.readline().split()))
+
+    @staticmethod
+    def read_complex(fid: TextIOWrapper):
+        def tuple2complex(t: str):
+            t = eval(t)
+            return t[0]+t[1]*1.j
+        return list(map(tuple2complex, fid.readline().split()))
+
+    def get_Hamiltonian(self, filename: str, TotalOrbital: int):
+        HR = {}
+        with open(filename, "r") as fid:
+            line = fid.readline()
+            csr_dim = int(fid.readline().split()[-1])
+            if csr_dim == TotalOrbital:
+                read_func = self.read_real
+            elif csr_dim == 2*TotalOrbital:
+                read_func = self.read_complex
+            csr_number = int(fid.readline().split()[-1])
+            line = fid.readline()
+            while line:
+                s1, s2, s3, nnz = [int(i) for i in line.split()]
+                key = (s1, s2, s3)
+                if nnz == 0:
+                    line = fid.readline()
+                else:
+                    line_V = read_func(fid)
+                    line_COL_INDEX = list(map(int, fid.readline().split()))
+                    line_ROW_INDEX = list(map(int, fid.readline().split()))
+                    block = csr_matrix((line_V,
+                                        line_COL_INDEX,
+                                        line_ROW_INDEX),
+                                       shape=(csr_dim, csr_dim)).toarray()
+                    HR[key] = torch.from_numpy(block) * Rydberg
+                    line = fid.readline()
+        return HR
+
+    def get_Overlap(self, filename: str, TotalOrbital: int):
+        SR = {}
+        with open(filename, "r") as fid:
+            line = fid.readline()
+            csr_dim = int(fid.readline().split()[-1])
+            if csr_dim == TotalOrbital:
+                read_func = self.read_real
+            elif csr_dim == 2*TotalOrbital:
+                read_func = self.read_complex
+            csr_number = int(fid.readline().split()[-1])
+            line = fid.readline()
+            while line:
+                s1, s2, s3, nnz = [int(i) for i in line.split()]
+                key = (s1, s2, s3)
+                if nnz == 0:
+                    line = fid.readline()
+                else:
+                    line_V = read_func(fid)
+                    line_COL_INDEX = list(map(int, fid.readline().split()))
+                    line_ROW_INDEX = list(map(int, fid.readline().split()))
+                    block = csr_matrix((line_V,
+                                        line_COL_INDEX,
+                                        line_ROW_INDEX),
+                                       shape=(csr_dim, csr_dim)).toarray()
+                    SR[key] = torch.from_numpy(block)
+                    line = fid.readline()
+        return SR
+
+    def get_HS(self, HS_file: dict, TotalOrbital: int):
+        filedata = dict()
+        for file_key, file_value in HS_file.items():
+            if file_value is None:
+                filedata[file_key] = None
+
+            elif file_key in ["H0_file", "H1_file"]:
+                filedata[file_key] = self.get_Hamiltonian(file_value, TotalOrbital)
+
+            elif file_key in ["S_file"]:
+                filedata[file_key] = self.get_Overlap(file_value, TotalOrbital)
+        return list(filedata.values())
+
     def get_wigner_D(self, order: Union[int, List[int]]):
         """
         D @ Y_wiki == Y_abacus
         """
         D = [
-            torch.tensor([[1.0]], dtype=self.floatdtype, device=self.device),
+            torch.tensor([[1.0]]),
             torch.tensor([[0, 1, 0],
-                          [0, 0, -1],
-                          [-1, 0, 0]], dtype=self.floatdtype, device=self.device),
+                      [0, 0, -1],
+                      [-1, 0, 0]]),
             torch.tensor([[0, 0, 1, 0, 0],
-                          [0, 0, 0, -1, 0],
-                          [0, -1, 0, 0, 0],
-                          [0, 0, 0, 0, 1],
-                          [1, 0, 0, 0, 0]], dtype=self.floatdtype, device=self.device)
+                      [0, 0, 0, -1, 0],
+                      [0, -1, 0, 0, 0],
+                      [0, 0, 0, 0, 1],
+                      [1, 0, 0, 0, 0]]),
+            torch.tensor([[0, 0, 0, 1, 0, 0, 0],
+                      [0, 0, 0, 0, -1, 0, 0],
+                      [0, 0, -1, 0, 0, 0, 0],
+                      [0, 0, 0, 0, 0, 1, 0],
+                      [0, 1, 0, 0, 0, 0, 0],
+                      [0, 0, 0, 0, 0, 0, -1],
+                      [-1, 0, 0, 0, 0, 0, 0]])
         ]
 
         if isinstance(order, int):
@@ -203,196 +294,183 @@ class AbacusData(DataBase):
         DirectSum = torch.block_diag(*[D[l] for l in order])
         return DirectSum
 
-    def read_HS(self, hsfile, S, flag="H"):
-        '''read non-orthogonal Hamiltonian and overlap'''
-        S_tuple = set([tuple(i.tolist()) for i in S])
-        if flag == "H":
-            factor = 13.605698
-        elif flag == "S":
-            factor = 1
+    def abacus2hotham(self,
+                      # matrix
+                      HR: dict,
+                      iHR: dict,
+                      SR: dict,
+                      # structure information
+                      AtomType: torch.tensor,
+                      cell_shift: torch.tensor,
+                      edge_index: torch.tensor,
+                      # orbital information
+                      offset: torch.tensor,
+                      TotalOrbital: int):
+        has_HR, has_iHR, has_SR = False, False, False
+        H_block, iH_block, S_block = [], [], []
+        if HR is not None:
+            has_HR = True
+            H_block = [[[] for _ in range(self.n_type)] for _ in range(self.n_type)]
+        if iHR is not None:
+            has_iHR = True
+            iH_block = [[[] for _ in range(self.n_type)] for _ in range(self.n_type)]
+        if SR is not None:
+            has_SR = True
+            S_block = [[[] for _ in range(self.n_type)] for _ in range(self.n_type)]
 
-        hsR = {}
-        with open(hsfile, "r") as fid:
-            line = fid.readline()
-            csr_dim = int(fid.readline().split()[-1])
-            line = fid.readline()
-            line = fid.readline()
-            while line:
-                s1, s2, s3, nnz = [int(i) for i in line.split()]
-                s_key = (s1, s2, s3)
-                if nnz == 0:
-                    line = fid.readline()
-                    # hsr = torch.zeros((csr_dim, csr_dim))
-                    continue
+        nspin = 1
+        if iHR is not None:
+            nspin = 2
+        elif HR is not None or SR is not None:
+            MR = HR if HR is not None else SR
+            csr_dim = list(MR.values())[0].shape[0]
+            if csr_dim == 2*TotalOrbital:
+                nspin = 4
+
+        for i in range(edge_index.shape[1]):
+            s1, s2, s3 = cell_shift[i]
+            n1, n2 = edge_index[:, i]
+            n1, n2 = n1.item(), n2.item()
+            start1, start2 = offset[[n1, n2]]
+            atomtype_1 = AtomType[n1].item()
+            atomtype_2 = AtomType[n2].item()
+            o1 = self.AtomType_OrbitalSum[atomtype_1]
+            o2 = self.AtomType_OrbitalSum[atomtype_2]
+            key_dft = (s1.item(), s2.item(), s3.item())
+            key_hotham = (s1.item(), s2.item(), s3.item(), n1, n2)
+            if has_HR:
+                if key_dft in HR:
+                    if nspin == 1:
+                        # H_spin_o1_o2 = HR[key_dft][start1:start1+o1, start2:start2+o2][None, ...]
+                        H_spin_o1_o2 = HR[key_dft][start1:start1+o1, start2:start2+o2]
+                        H_block[atomtype_1][atomtype_2].append(H_spin_o1_o2)
+                    elif nspin > 1:
+                        raise NotImplementedError("Interface for nspin>1 is under development")
                 else:
-                    line_V = fid.readline().split()
-                    line_COL_INDEX = fid.readline().split()
-                    line_ROW_INDEX = fid.readline().split()
-                    line = fid.readline()
-                    if s_key not in S_tuple:  # flag == "H" and (s_key not in S_tuple):
-                        continue
-                    hsr = torch.from_numpy(csr_matrix((np.array(line_V).astype(float),
-                                                       np.array(line_COL_INDEX).astype(int),
-                                                       np.array(line_ROW_INDEX).astype(int)),
-                                                      shape=(csr_dim, csr_dim)).toarray()).to(torch.float32).to(device=self.device)
-                hsR[s_key] = hsr * factor
-        return hsR
-
-    def HS_preprocess(self, hsR: dict, AtomType, edge_index, S):
-        if self.target == "hamiltonian":
-            num_atomtype = len(self.AtomSymbol_to_AtomType)
-            H_block = [[] for _ in range(num_atomtype**2)]
-            # if not self.para.edge_include_sc:
-            #     Onsite_block=[[] for _ in range(num_atomtype)]
-            offset1 = torch.cumsum(self.AtomType_OrbitalSum[AtomType], dim=0).to(self.device)
-            offset2 = torch.cat([torch.tensor([0]).to(self.device), offset1[:-1]], dim=0)
-
-            for index in range(edge_index.shape[-1]):
-                s1, s2, s3 = S[index]
-                s_key = (s1.item(), s2.item(), s3.item())
-                n1, n2 = edge_index.T[index]
-                atomtype_1 = AtomType[n1].item()
-                atomtype_2 = AtomType[n2].item()
-                index_HBlcok = atomtype_1*num_atomtype+atomtype_2
-                offset_row1 = offset1[n1].item()
-                offset_col1 = offset1[n2].item()
-                offset_row2 = offset2[n1].item()
-                offset_col2 = offset2[n2].item()
-
-                if s_key not in hsR.keys():
-                    block = torch.zeros((1, offset_row1-offset_row2, offset_col1-offset_col2))
+                    H_spin_o1_o2 = torch.zeros((o1,o2))
+                    #H_spin_o1_o2 = np.zeros((o1,o2))[None, ...]
+                    H_block[atomtype_1][atomtype_2].append(H_spin_o1_o2)
+                    # raise KeyError(f"Can't find {key_dft} derived by ase in abacus's neighbor list")
+            if has_iHR:
+                if key_dft in iHR:
+                    if nspin == 1:
+                        iH_spin_o1_o2 = iHR[key_dft][start1:start1+o1, start2:start2+o2][None, ...]
+                        iH_block[atomtype_1][atomtype_2].append(iH_spin_o1_o2)
+                    elif nspin > 1:
+                        raise NotImplementedError("Interface for nspin>1 is under development")
                 else:
-                    block = hsR[s_key][offset_row2:offset_row1, offset_col2:offset_col1].unsqueeze(0)
+                    raise KeyError(f"Can't find {key_dft} derived by ase in abacus's neighbor list")
+            if has_SR:
+                if key_dft in SR:
+                    s_o1_o2 = SR[key_dft][start1:start1+o1, start2:start2+o2]
+                    S_block[atomtype_1][atomtype_2].append(s_o1_o2)
+                else:
+                    s_o1_o2 = torch.zeros((o1,o2))
+                    S_block[atomtype_1][atomtype_2].append(s_o1_o2)
+                    #raise KeyError(f"Can't find {key_dft} derived by ase in abacus's neighbor list")
 
-                H_block[index_HBlcok].append(block)
+        for atomtype_1 in range(self.n_type):
+            for atomtype_2 in range(self.n_type):
+                winger_D_1 = self.get_wigner_D(self.AtomType_AMList[atomtype_1])
+                winger_D_2 = self.get_wigner_D(self.AtomType_AMList[atomtype_2])
+                if has_HR and (len(H_block[atomtype_1][atomtype_2]) != 0):
+                    H_block[atomtype_1][atomtype_2] = torch.stack(H_block[atomtype_1][atomtype_2]).to(torch.float32)
+                    # H_block[atomtype_1][atomtype_2] = torch.einsum("ij,zsjk,kl->zsil", winger_D_1.T, H_block[atomtype_1][atomtype_2], winger_D_2)
+                    H_block[atomtype_1][atomtype_2] = torch.einsum("ij,zjk,kl->zil", winger_D_1.T, H_block[atomtype_1][atomtype_2], winger_D_2)
+                if has_iHR and (len(iH_block[atomtype_1][atomtype_2]) != 0):
+                    iH_block[atomtype_1][atomtype_2] = torch.stack(iH_block[atomtype_1][atomtype_2])
+                    iH_block[atomtype_1][atomtype_2] = torch.einsum("ij,zsjk,kl->zsil", winger_D_1.T, iH_block[atomtype_1][atomtype_2], winger_D_2)
+                if has_SR and (len(S_block[atomtype_1][atomtype_2]) != 0):
+                    S_block[atomtype_1][atomtype_2] = torch.stack(S_block[atomtype_1][atomtype_2]).to(torch.float32)
+                    S_block[atomtype_1][atomtype_2] = torch.einsum("ij,zjk,kl->zil", winger_D_1.T, S_block[atomtype_1][atomtype_2], winger_D_2)
 
-            if not self.para.edge_include_sc:
-                s_key = (0, 0, 0)
-                for n in range(AtomType.shape[0]):
-                    offset_row1 = offset1[n].item()
-                    offset_row2 = offset2[n].item()
-                    block = hsR[s_key][offset_row2:offset_row1, offset_row2:offset_row1].unsqueeze(0)
-                    atomtype = AtomType[n].item()
-                    index_HBlock = atomtype*num_atomtype+atomtype
-                    H_block[index_HBlock].append(block)
+        return H_block, iH_block, S_block
 
-            H_block = [torch.cat(sub_block).to(self.device) for sub_block in H_block]
-
-            """
-            B_wiki == D_i.T @ B_abacus @ D_j
-            """
-            for atomtype_i in range(num_atomtype):
-                for atomtype_j in range(num_atomtype):
-                    winger_D_i = self.get_wigner_D(self.AtomType_AMList[atomtype_i])
-                    winger_D_j = self.get_wigner_D(self.AtomType_AMList[atomtype_j])
-
-                    index_HBlcok = atomtype_i*num_atomtype+atomtype_j
-                    H_block[index_HBlcok] = torch.einsum("ij,zjk,kl->zil", winger_D_i.T, H_block[index_HBlcok], winger_D_j)
-
-            return H_block
-
-        elif self.target == "band":
-            offset1 = torch.cumsum(self.AtomType_OrbitalSum[AtomType], dim=0).to(self.device)
-            offset2 = torch.cat([torch.tensor([0]).to(self.device), offset1[:-1]], dim=0)
-            hsR_rotated = torch.stack(list(hsR.values()))
-            for ni in range(len(AtomType)):
-                for nj in range(len(AtomType)):
-                    winger_D_i = self.get_wigner_D(self.AtomType_AMList[AtomType[ni].item()])
-                    winger_D_j = self.get_wigner_D(self.AtomType_AMList[AtomType[nj].item()])
-
-                    offset_row1 = offset1[ni].item()
-                    offset_col1 = offset1[nj].item()
-                    offset_row2 = offset2[ni].item()
-                    offset_col2 = offset2[nj].item()
-
-                    block_ij = hsR_rotated[:, offset_row2:offset_row1, offset_col2:offset_col1]
-                    hsR_rotated[:, offset_row2:offset_row1, offset_col2:offset_col1] = torch.einsum("ij,zjk,kl->zil", winger_D_i.T, block_ij, winger_D_j)
-            H_block = {key: value for key, value in zip(hsR.keys(), hsR_rotated)}
-
-        return H_block
-
-    def Hamilton(self):
+    def get_data(self):
         dataset = []
-
         for root, _, files in os.walk(self.dataset):
+            HS_file = {"H0_file": None, "H1_file": None, "S_file": None}
             if "data-HR-sparse_SPIN0.csr" in files:
-                HRFile = os.path.join(root, "data-HR-sparse_SPIN0.csr")
-                STRUFile = os.path.join(root, "STRU")
-                assert os.path.exists(f"{STRUFile}")
-                frame = read(STRUFile)
+                HS_file["H0_file"] = os.path.join(root, "data-HR-sparse_SPIN0.csr")
+            if "data-HR-sparse_SPIN1.csr" in files:
+                HS_file["H1_file"] = os.path.join(root, "data-HR-sparse_SPIN1.csr")
+            if "data-SR-sparse_SPIN0.csr" in files:
+                HS_file["S_file"] = os.path.join(root, "data-SR-sparse_SPIN0.csr")
+            if all([f is None for f in list(HS_file.values())]):
+                continue
 
-                _, _, d, D, S, edge_index, edge_inverse = self.find_neigbhor(frame, self.rc)
-                AtomType = torch.tensor([self.AtomSymbol_to_AtomType[symbol] for symbol in frame.symbols], dtype=torch.long)
-                lattice = torch.tensor(frame.cell.array).unsqueeze(0).to(self.floatdtype)
-                pos = torch.from_numpy(frame.positions).to(self.floatdtype)
-                HR = self.read_HS(HRFile, S)
-                HR = self.HS_preprocess(HR, AtomType, edge_index, S)
+            structure = read(os.path.join(root, "../model.xyz"))
 
-                data = Data(AtomType=AtomType,
-                            # lattice=lattice,
-                            pos=pos,
-                            HR=HR,
-                            edge_index_hop=edge_index.to(self.intdtype),
-                            d_hop=d.to(self.floatdtype),
-                            D_hop=D.to(self.floatdtype),
-                            S_hop=S.to(self.intdtype),
-                            edge_inverse=edge_inverse.to(self.intdtype))
+            # atom_type, n_type, lattice, position
+            AtomType = torch.tensor([self.AtomNumber_to_AtomType[atomnumber] for atomnumber in structure.numbers])
+            n_type = self.n_type
+            lattice = torch.tensor(np.array(structure.cell))
+            pos = torch.tensor(structure.positions)
 
-                dataset.append(data.to(device=self.device))
+            # atom_type's orbit number
+            # Hamiltonian and overlap start index for each atom
+            Node_OrbitalSum = self.AtomType_OrbitalSum[AtomType]
+            offset = torch.cumsum(Node_OrbitalSum,dim=0)-Node_OrbitalSum
+            TotalOrbital = Node_OrbitalSum.sum()
 
+            # Hamiltonian (spin, key, orbit_0, oribit_1)
+            # overlap     (key, orbit_0, oribit_1)
+            HR, iHR, SR = self.get_HS(HS_file=HS_file, TotalOrbital=TotalOrbital)
+
+            # 1.calculate and check neighbor list
+            # 2.convert abacus's Hamiltonian and overlap to hotham's order
+            #   Hamiltonian  (n_type, n_type, edge, spin, orbit_0, oribit_1)
+            #   iHamiltonian (n_type, n_type, edge, spin, orbit_0, oribit_1)
+            #   overlap      (n_type, n_type, edge,       orbit_0, oribit_1)
+            cutoff = [self.para["cutoff"][symbol]*Bohr for symbol in structure.get_chemical_symbols()]
+            _, _, d, D, S, edge_index, edge_inverse = self.find_neigbhor(frame=structure, cutoff=cutoff)
+            unique_cell_shift, cell_shift_index = find_cell_shfit_index(S)
+            HR, iHR, SR = self.abacus2hotham(HR=HR,
+                                             iHR=iHR,
+                                             SR=SR,
+                                             AtomType=AtomType,
+                                             edge_index=edge_index,
+                                             cell_shift=S,
+                                             offset=offset,
+                                             TotalOrbital=TotalOrbital)
+
+            # save as dict
+            data=Data(
+                AtomType=AtomType,
+                AtomType_OrbitalSum=self.AtomType_OrbitalSum,
+                offset=offset,
+                n_type=n_type,
+                lattice=lattice,
+                pos=pos.to(self.floatdtype),
+                edge_index_hop=edge_index.to(self.intdtype),
+                edge_inverse=edge_inverse.to(self.intdtype),
+                D_hop=D.to(self.floatdtype),
+                d_hop=d.to(self.floatdtype),
+                S_hop=S.to(self.floatdtype),
+                unique_cell_shift=unique_cell_shift,
+                cell_shift_index=cell_shift_index
+            )
+            # data = {"AtomType": AtomType,
+            #         "AtomType_OrbitalSum": self.AtomType_OrbitalSum,
+            #         "offset": offset,
+            #         "n_type": n_type,
+            #         "lattice": lattice,
+            #         "pos": pos,
+            #         "edge_index": edge_index,
+            #         "inv_edge_index": edge_inverse,
+            #         "D": D,
+            #         "d": d,
+            #         "S": S,
+            #         "unique_cell_shift": unique_cell_shift,
+            #         "cell_shift_index": cell_shift_index}
+            if len(HR) != 0:
+                data["HR"] = HR
+            if len(iHR) != 0:
+                data["iHR"] = iHR
+            if len(SR) != 0:
+                data["SR"] = SR
+            dataset.append(data)
         return dataset
-
-    def Band(self):
-        dataset = []
-
-        for root, _, files in os.walk(self.dataset):
-            if "STRU" in files or "model.xyz" in files or "running_scf.log" in files:
-                # if "running_scf.log" in files:
-                kpoints_file = os.path.join(root, "kpoints.npy")
-                eigs_file = os.path.join(root, "BANDS_1.dat")
-                structure_file = os.path.join(root, "model.xyz") if "model.xyz" in files else os.path.join(root, "STRU")
-                # structure_file = os.path.join(root, "running_scf.log")
-                SRFile = os.path.join(root, "data-SR-sparse_SPIN0.csr")
-                HRFile = os.path.join(root, "data-HR-sparse_SPIN0.csr")
-
-                if os.path.exists(kpoints_file):
-                    kpoints = torch.from_numpy(np.load(kpoints_file)).to(self.para.floatdtype)
-                if os.path.exists(eigs_file):
-                    eigs_ref = torch.from_numpy(np.loadtxt(eigs_file)).to(self.para.floatdtype)
-                assert os.path.exists(structure_file)
-                frame = read(structure_file)
-
-                _, _, d, D, S, edge_index, edge_inverse = self.find_neigbhor(frame, self.rc)
-                AtomType = torch.tensor([self.AtomSymbol_to_AtomType[symbol] for symbol in frame.symbols], dtype=self.intdtype)
-                lattice = torch.tensor(frame.cell.array).unsqueeze(0).to(self.floatdtype)
-                pos = torch.from_numpy(frame.positions).to(self.floatdtype)
-
-                data = Data(AtomType=AtomType,
-                            # lattice=lattice,
-                            pos=pos,
-                            edge_index_hop=edge_index.to(self.intdtype),
-                            d_hop=d.to(self.floatdtype),
-                            D_hop=D.to(self.floatdtype),
-                            S_hop=S.to(self.intdtype),
-                            edge_inverse=edge_inverse.to(self.intdtype))
-
-                if os.path.exists(kpoints_file):
-                    data.kpoints = kpoints.unsqueeze(0)
-                if os.path.exists(eigs_file):
-                    data.eigs_ref = eigs_ref.unsqueeze(0)
-                if os.path.exists(SRFile):
-                    SR = self.read_HS(SRFile, S, "S")
-                    SR = self.HS_preprocess(SR, AtomType, edge_index, S)
-                    data.SR = [SR]
-                if os.path.exists(HRFile):
-                    HR = self.read_HS(HRFile, S)
-                    HR = self.HS_preprocess(HR, AtomType, edge_index, S)
-                    data.HR = [HR]
-
-                dataset.append(data.to(device=self.device))
-
-        return dataset
-
 
 class OpenmxData(DataBase):
     def __init__(self, para: Union[dict, Parameters], dataset):
@@ -817,27 +895,23 @@ class GraphData(DataBase):
 
 if __name__ == "__main__":
     inputfile = {
-        # "trainset": ,
-        # "valset": ,
-        "testset": "/fs08/home/js_liangzx/anaconda3/envs/deep/neptb/dataset/GTB/openmx-water5/getdata/data/valset",
+        "trainset": "./tmp",
         "train_target": "hamiltonian",
-        "dft": "openmx",
+        "dft": "abacus",
         "orbit": {
             "H": [
                 "1s",
                 "2s",
                 "2p"
-            ],
-            "O": [
-                "1s",
-                "2s",
-                "2p",
-                "3p",
-                "3d"
             ]
         },
-        "rc": 7.5,
-        "L_max": 5
+        "cutoff": {
+            "H": 6.0
+        },
+        "rc": 6,
+        "L_max": 5,
+        "using_CoordinateTransformation": True,
+        "edge_include_sc": True,
     }
 
     param = Parameters(inputfile)

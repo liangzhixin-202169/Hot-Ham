@@ -80,7 +80,7 @@ class Lossfunction(object):
             e = eig[structure_index]
             e_ref = eig_ref[structure_index]
             diff2 = (e-e_ref)**2
-            num_kn = +e.numel()
+            num_kn += e.numel()
             MSEloss += torch.sum(diff2*band_weight)
         MSEloss = MSEloss/num_kn
         return MSEloss
