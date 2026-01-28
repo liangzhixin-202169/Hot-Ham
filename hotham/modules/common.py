@@ -2,6 +2,34 @@ from e3nn import o3
 from e3nn.util.jit import compile_mode
 import torch
 from torch_scatter import scatter
+import re
+from ase.atom import atomic_numbers
+
+
+class BasicInfo():
+    def __init__(self, orbit: dict, device="cpu", intdtype=torch.int64):
+        self.orbit = orbit
+        self.device = device
+        self.intdtype = intdtype
+
+        # Atom type informatio
+        self.AtomSymbol_to_AtomNumber = {atomsymbol: atomnumber for atomsymbol, atomnumber in atomic_numbers.items() if atomsymbol in orbit.keys()}
+        self.AtomNumber_to_AtomSymbol = {atomnumber: atomsymbol for atomsymbol, atomnumber in self.AtomSymbol_to_AtomNumber.items()}
+        unique_type = sorted(self.AtomNumber_to_AtomSymbol.keys())
+        self.AtomNumber_to_AtomType = {num: i for i, num in enumerate(unique_type)}
+        self.AtomSymbol_to_AtomType = {self.AtomNumber_to_AtomSymbol[atomnumber]: atomtype for atomnumber, atomtype in self.AtomNumber_to_AtomType.items()}
+        self.AtomType_to_AtomNumber = {atomtype: atomnumber for atomnumber, atomtype in self.AtomNumber_to_AtomType.items()}
+        self.AtomType_to_AtomSymbol = {atomtype: self.AtomNumber_to_AtomSymbol[atomnumber] for atomnumber, atomtype in self.AtomNumber_to_AtomType.items()}
+        self.n_type = len(self.AtomType_to_AtomSymbol)
+
+        # Orbit information
+        self.AMSymbol_to_AM = {"s": 0, "p": 1, "d": 2, "f": 3, "g": 4}
+        self.AtomType_AMSymbolList = {self.AtomSymbol_to_AtomType[k]: list(map(lambda x: ''.join(re.findall(r'[A-Za-z]', x)), v)) for k, v in orbit.items()}
+        self.AtomType_OrbitalSum = torch.tensor([sum(list(map(lambda x: 2*self.AMSymbol_to_AM[x]+1, self.AtomType_AMSymbolList[k])))
+                                                for k in sorted(self.AtomType_AMSymbolList)]).to(self.intdtype).to(self.device)
+        self.AtomType_AMList = {atomtype: list(map(lambda x: self.AMSymbol_to_AM[x], amsymbollist)) for atomtype, amsymbollist in self.AtomType_AMSymbolList.items()}
+        self.AtomSymbol_to_AMList = {self.AtomType_to_AtomSymbol[atomtype]: amlist for atomtype, amlist in self.AtomType_AMList.items()}
+        self.AtomSymbol_to_OrbitlSum = {self.AtomType_to_AtomSymbol[atomtype]: obsum for atomtype, obsum in enumerate(self.AtomType_OrbitalSum)}
 
 
 class MCST(o3.Irreps):

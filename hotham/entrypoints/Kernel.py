@@ -4,6 +4,7 @@ import sys
 from ..entrypoints.Parameters import Parameters
 from ..entrypoints.Lossfun import LossRecord, Lossfunction
 from ..data.DatasetPreprocess import DatasetPrepocess
+from ..modules.common import BasicInfo
 
 
 class Kernel(torch.nn.Module):
@@ -13,6 +14,9 @@ class Kernel(torch.nn.Module):
         self.intdtype = self.para.intdtype
         self.floatdtype = self.para.floatdtype
         self.device = self.para.device
+
+        # Basic atom type and orbit information
+        self.basicinfo = BasicInfo(para.orbit, device=self.device, intdtype=self.intdtype)
 
         # Read dataset
         self.datapreprocess = DatasetPrepocess(para)
@@ -72,7 +76,7 @@ class Kernel(torch.nn.Module):
                     self.lr_scheduler.step(checkpoint['Train_MAE'])
 
         # Define loss function
-        self.lossfunction = Lossfunction(para)
+        self.lossfunction = Lossfunction(para, self.basicinfo)
         self.train_lossrecord = LossRecord()
         self.val_lossrecord = LossRecord()
         self.test_lossrecord = LossRecord()
@@ -96,6 +100,7 @@ class Kernel(torch.nn.Module):
             self.test_lossrecord.reset()
 
             for data in self.trainloader:
+                data.to(device=self.device)
                 self.optimizer.zero_grad()
                 H_block, GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
                 mse, mae, num_ele = self.lossfunction.trainloss_ham(H_block, GraphEdgeIndex_to_BlockEdgeIndex, self.model.AtomType_OrbitalSum, data)
@@ -113,11 +118,13 @@ class Kernel(torch.nn.Module):
                 self.model.eval()
                 with torch.no_grad():
                     for data in self.valsetloader:
+                        data.to(self.device)
                         H_block, GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
                         val_loss_MSE, val_loss_MAE, num_ele = self.lossfunction.trainloss_ham(H_block, GraphEdgeIndex_to_BlockEdgeIndex, self.model.AtomType_OrbitalSum, data)
                         self.val_lossrecord.update(val_loss_MSE.item(), val_loss_MAE.item(), num_ele)
 
                     for data in self.testsetloader:
+                        data.to(self.device)
                         H_block, GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
                         test_loss_MSE, test_loss_MAE, num_ele = self.lossfunction.trainloss_ham(H_block, GraphEdgeIndex_to_BlockEdgeIndex, self.model.AtomType_OrbitalSum, data)
                         self.test_lossrecord.update(test_loss_MSE.item(), test_loss_MAE.item(), num_ele)
