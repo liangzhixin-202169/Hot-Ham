@@ -15,6 +15,7 @@ from abc import ABC
 import h5py
 from io import TextIOWrapper
 from e3nn import o3
+from tqdm import tqdm
 
 
 def find_inverse_index(I, J, S):
@@ -659,6 +660,7 @@ class OpenmxData(DataBase):
 
     def get_data(self):
         dataset = []
+        paths = []
         for root, _, files in os.walk(self.dataset):
             if "Hks.txt" in files:
                 HS_file = os.path.join(root, "Hks.txt")
@@ -666,7 +668,9 @@ class OpenmxData(DataBase):
                 HS_file = os.path.join(root, "overlap.txt")
             else:
                 continue
+            paths.append((root, HS_file))
 
+        for root, HS_file in tqdm(paths):
             structure = read(os.path.join(root, "model.xyz"))
 
             # atom_type, n_type, lattice, position

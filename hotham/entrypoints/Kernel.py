@@ -143,16 +143,19 @@ class Kernel(torch.nn.Module):
         self.model.eval()
         with torch.no_grad():
             for data in self.trainloader:
+                data.to(self.device)
                 H_block, GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
                 train_loss_MSE, train_loss_MAE, num_ele = self.lossfunction.testloss_ham(H_block, GraphEdgeIndex_to_BlockEdgeIndex, self.model.AtomType_OrbitalSum, data)
                 self.train_lossrecord.update(train_loss_MSE.item(), train_loss_MAE.item(), num_ele)
 
             for data in self.valsetloader:
+                data.to(self.device)
                 H_block, GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
                 val_loss_MSE, val_loss_MAE, num_ele = self.lossfunction.testloss_ham(H_block, GraphEdgeIndex_to_BlockEdgeIndex, self.model.AtomType_OrbitalSum, data)
                 self.val_lossrecord.update(val_loss_MSE.item(), val_loss_MAE.item(), num_ele)
 
             for data in self.testsetloader:
+                data.to(self.device)
                 H_block, GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
                 test_loss_MSE, test_loss_MAE, num_ele = self.lossfunction.testloss_ham(H_block, GraphEdgeIndex_to_BlockEdgeIndex, self.model.AtomType_OrbitalSum, data)
                 self.test_lossrecord.update(test_loss_MSE.item(), test_loss_MAE.item(), num_ele)
