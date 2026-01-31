@@ -3,9 +3,11 @@ import argparse
 import json5
 from time import time
 import torch
+import torch.distributed as dist
 from ..entrypoints.Parameters import Parameters
 from ..entrypoints.Kernel import Kernel
 from ..utilities.seed import set_seed
+torch.multiprocessing.set_start_method("spawn", force=True)
 
 
 def device_synchronize(input: dict):
@@ -14,6 +16,7 @@ def device_synchronize(input: dict):
 
 
 def main():
+    # input parameters
     parser = argparse.ArgumentParser()
     parser.add_argument('inputfile', type=str)
     args = parser.parse_args()
@@ -22,23 +25,48 @@ def main():
     with open(args.inputfile, "r") as f:
         input = json5.load(f)
 
+    # initialize distribution
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        device = torch.device("cuda", local_rank)
+        dist.init_process_group(backend="nccl")
+    else:
+        dist.init_process_group(backend="gloo")
+        device = torch.device("cpu")
+
+    # seet random seed
     if input.get("seed", None) != None:
         set_seed(input["seed"])
 
+    # initialize model. read dataset
     device_synchronize(input)
     time_begin = time()
     para = Parameters(input)
+    if para.device != "cpu":
+        para.rank = rank
+        para.local_rank = local_rank
+        para.device = device
+        para.world_size = dist.get_world_size()
     kernel = Kernel(para)
     device_synchronize(input)
     time_finish = time()
-    print("-"*50+f"\nTime used for initialization = {time_finish-time_begin:.3f} s.\n"+"-"*50)
+    if rank == 0:
+        print("-"*50+f"\nTime used for initialization = {time_finish-time_begin:.3f} s.\n"+"-"*50)
 
+    # run
     device_synchronize(input)
     time_begin = time()
     kernel.run()
     device_synchronize(input)
     time_finish = time()
-    print("-"*50+f"\nTime used for training = {time_finish-time_begin:.3f} s.\n"+"-"*50)
+    if rank == 0:
+        print("-"*50+f"\nTime used for training = {time_finish-time_begin:.3f} s.\n"+"-"*50)
+
+    # finish
+    dist.barrier()
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":

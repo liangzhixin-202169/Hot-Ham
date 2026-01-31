@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 from ..entrypoints.Parameters import Parameters
 from ..modules.common import BasicInfo
 
@@ -67,6 +68,23 @@ class LossRecord():
         self.__mae_max = 0.
         self.__mse_min = 0.
         self.__mae_min = 0.
+
+    def global_loss(self, device):
+        globel_info = torch.tensor([self.__mse, self.__mae, self.__num_ele], device=device)
+        dist.all_reduce(globel_info, op=dist.ReduceOp.SUM)
+        mse_global = (globel_info[0]/globel_info[2])**0.5
+        mae_global = globel_info[1]/globel_info[2]
+        return mse_global, mae_global
+
+    def global_max(self, device):
+        global_info = torch.tensor([self.mse_max, self.mae_max], device=device)
+        dist.all_reduce(global_info, op=dist.ReduceOp.MAX)
+        return global_info
+
+    def global_min(self, device):
+        global_info = torch.tensor([self.mse_min, self.mae_min], device=device)
+        dist.all_reduce(global_info, op=dist.ReduceOp.MIN)
+        return global_info
 
 
 class Lossfunction(object):

@@ -711,11 +711,9 @@ class HothamData(object):
     def __init__(self, para: Union[dict, Parameters], dataset):
         assert os.path.exists(dataset)
         if torch.__version__ >= "2.0.0":
-            self.dataset = torch.load(dataset, weights_only=True)
+            self.dataset = torch.load(dataset, weights_only=False)
         else:
             self.dataset = torch.load(dataset)
-        # self.device = para.device
-        # self.dataset = tensor2device(self.dataset, self.device)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,4 @@
 import torch
-from torch.nn.parallel import DistributedDataParallel as DDP
-import torch.distributed as dist
 import os
 import sys
 from ..entrypoints.Parameters import Parameters
@@ -30,7 +28,6 @@ class Kernel(torch.nn.Module):
         self.start_epoch = 0
         self.checkpoint_info = None
         if self.para.init_from_model is not None:
-            # discard
             self.model = torch.load(self.para.model_init_path)
             self.model.to(device=self.device)
             self.optimizer = getattr(torch.optim, para.optimizer)(self.model.parameters(),
@@ -45,10 +42,6 @@ class Kernel(torch.nn.Module):
 
             self.model = Model(para=para)
             self.model.to(device=self.device)
-            if self.device.type == "cuda":
-                self.model = DDP(self.model, device_ids=[self.para.local_rank])
-            else:
-                self.model = DDP(self.model)
             self.optimizer = getattr(torch.optim, para.optimizer)(self.model.parameters(),
                                                                   lr=self.para.lr,
                                                                   weight_decay=self.para.lambda_2)
@@ -102,7 +95,6 @@ class Kernel(torch.nn.Module):
 
         for epoch in range(self.start_epoch, self.start_epoch+self.para.epoch):
             self.model.train()
-            self.trainloader.sampler.set_epoch(epoch)
             self.train_lossrecord.reset()
             self.val_lossrecord.reset()
             self.test_lossrecord.reset()
@@ -120,27 +112,16 @@ class Kernel(torch.nn.Module):
                 current_lr = self.lr_scheduler.get_last_lr()[0]
             elif self.para.lr_scheduler == "ReduceLROnPlateau":
                 current_lr = self.optimizer.state_dict()['param_groups'][0]['lr']
-
-            mse_global, mae_global = self.train_lossrecord.global_loss(self.device)
-            if self.para.rank == 0:
-                info_global = f"Epoch:{epoch+1:>5}   lr: {current_lr:.6f}" + \
-                    f"   Train_MSE: {mse_global:.7f}   Train_MAE: {mae_global:.7f}"
+            info = f"Epoch:{epoch+1:>5}   lr: {current_lr:.6f}" + self.train_lossrecord.compute_info("Train")
 
             if ((epoch+1) % self.para.checkpoint_interval == 0):
                 self.model.eval()
                 with torch.no_grad():
-                    if self.para.rank == 0:
-                        self.save_checkpoint(epoch)
-
                     for data in self.valsetloader:
                         data.to(self.device)
                         H_block, GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
                         val_loss_MSE, val_loss_MAE, num_ele = self.lossfunction.trainloss_ham(H_block, GraphEdgeIndex_to_BlockEdgeIndex, self.model.AtomType_OrbitalSum, data)
                         self.val_lossrecord.update(val_loss_MSE.item(), val_loss_MAE.item(), num_ele)
-
-                    mse_global, mae_global = self.val_lossrecord.global_loss(self.device)
-                    if self.para.rank == 0:
-                        info_global += f"   Val_MSE: {mse_global:.7f}   Val_MAE: {mae_global:.7f}"
 
                     for data in self.testsetloader:
                         data.to(self.device)
@@ -148,18 +129,15 @@ class Kernel(torch.nn.Module):
                         test_loss_MSE, test_loss_MAE, num_ele = self.lossfunction.trainloss_ham(H_block, GraphEdgeIndex_to_BlockEdgeIndex, self.model.AtomType_OrbitalSum, data)
                         self.test_lossrecord.update(test_loss_MSE.item(), test_loss_MAE.item(), num_ele)
 
-                    mse_global, mae_global = self.train_lossrecord.global_loss(self.device)
-                    if self.para.rank == 0:
-                        info_global += f"   Test_MSE: {mse_global:.7f}   Test_MAE: {mae_global:.7f}"
+                    self.save_checkpoint(epoch)
+                    info += self.val_lossrecord.compute_info("Val")+self.test_lossrecord.compute_info("Test")
 
+            print(info)
             if self.para.lr_scheduler == "ExponentialLR":
                 self.lr_scheduler.step()
             elif self.para.lr_scheduler == "ReduceLROnPlateau":
                 self.lr_scheduler.step(self.train_lossrecord.mae_ave)
-
-            if self.para.rank == 0:
-                print(info_global)
-                sys.stdout.flush()
+            sys.stdout.flush()
 
     def eval(self):
         self.model.eval()
@@ -170,27 +148,11 @@ class Kernel(torch.nn.Module):
                 train_loss_MSE, train_loss_MAE, num_ele = self.lossfunction.testloss_ham(H_block, GraphEdgeIndex_to_BlockEdgeIndex, self.model.AtomType_OrbitalSum, data)
                 self.train_lossrecord.update(train_loss_MSE.item(), train_loss_MAE.item(), num_ele)
 
-            mse_global, mae_global = self.train_lossrecord.global_loss(self.device)
-            mse_global_max, mae_global_max = self.train_lossrecord.global_max(self.device)
-            mse_global_min, mae_global_min = self.train_lossrecord.global_min(self.device)
-            if self.para.rank == 0:
-                info_global = f"Train:\n" +\
-                    f"    MSE(eV^2): {mse_global:.7f}    MAX: {mse_global_max:.7f}    MIN: {mse_global_min:.7f}\n" +\
-                    f"    MAE(eV):   {mae_global:.7f}    MAX: {mae_global_max:.7f}    MIN: {mae_global_min:.7f}\n"
-
             for data in self.valsetloader:
                 data.to(self.device)
                 H_block, GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
                 val_loss_MSE, val_loss_MAE, num_ele = self.lossfunction.testloss_ham(H_block, GraphEdgeIndex_to_BlockEdgeIndex, self.model.AtomType_OrbitalSum, data)
                 self.val_lossrecord.update(val_loss_MSE.item(), val_loss_MAE.item(), num_ele)
-
-            mse_global, mae_global = self.val_lossrecord.global_loss(self.device)
-            mse_global_max, mae_global_max = self.val_lossrecord.global_max(self.device)
-            mse_global_min, mae_global_min = self.val_lossrecord.global_min(self.device)
-            if self.para.rank == 0:
-                info_global += f"Train:\n" +\
-                    f"    MSE(eV^2): {mse_global:.7f}    MAX: {mse_global_max:.7f}    MIN: {mse_global_min:.7f}\n" +\
-                    f"    MAE(eV):   {mae_global:.7f}    MAX: {mae_global_max:.7f}    MIN: {mae_global_min:.7f}\n"
 
             for data in self.testsetloader:
                 data.to(self.device)
@@ -198,16 +160,10 @@ class Kernel(torch.nn.Module):
                 test_loss_MSE, test_loss_MAE, num_ele = self.lossfunction.testloss_ham(H_block, GraphEdgeIndex_to_BlockEdgeIndex, self.model.AtomType_OrbitalSum, data)
                 self.test_lossrecord.update(test_loss_MSE.item(), test_loss_MAE.item(), num_ele)
 
-            mse_global, mae_global = self.test_lossrecord.global_loss(self.device)
-            mse_global_max, mae_global_max = self.test_lossrecord.global_max(self.device)
-            mse_global_min, mae_global_min = self.test_lossrecord.global_min(self.device)
-            if self.para.rank == 0:
-                info_global += f"Train:\n" +\
-                    f"    MSE(eV^2): {mse_global:.7f}    MAX: {mse_global_max:.7f}    MIN: {mse_global_min:.7f}\n" +\
-                    f"    MAE(eV):   {mae_global:.7f}    MAX: {mae_global_max:.7f}    MIN: {mae_global_min:.7f}\n"
-
-            if self.para.rank == 0:
-                print(info_global)
+            info = self.train_lossrecord.eval_info("Train") +\
+                self.val_lossrecord.eval_info("Val") +\
+                self.test_lossrecord.eval_info("Test")
+            print(info)
 
     def profile(self):
         def trace_handler(p):
