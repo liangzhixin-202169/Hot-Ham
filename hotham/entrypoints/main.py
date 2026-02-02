@@ -7,7 +7,7 @@ import torch.distributed as dist
 from ..entrypoints.Parameters import Parameters
 from ..entrypoints.Kernel import Kernel
 from ..utilities.seed import set_seed
-torch.multiprocessing.set_start_method("spawn", force=True)
+# torch.multiprocessing.set_start_method("spawn", force=True)
 
 
 def device_synchronize(input: dict):

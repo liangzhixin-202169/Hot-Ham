@@ -135,7 +135,7 @@ class Kernel(torch.nn.Module):
             mse_global_max, mae_global_max = self.val_lossrecord.global_max(self.device)
             mse_global_min, mae_global_min = self.val_lossrecord.global_min(self.device)
             if self.para.rank == 0:
-                info_global += f"Train:\n" +\
+                info_global += f"Val:\n" +\
                     f"    MSE(eV^2): {mse_global:.7f}    MAX: {mse_global_max:.7f}    MIN: {mse_global_min:.7f}\n" +\
                     f"    MAE(eV):   {mae_global:.7f}    MAX: {mae_global_max:.7f}    MIN: {mae_global_min:.7f}\n"
 
@@ -149,7 +149,7 @@ class Kernel(torch.nn.Module):
             mse_global_max, mae_global_max = self.test_lossrecord.global_max(self.device)
             mse_global_min, mae_global_min = self.test_lossrecord.global_min(self.device)
             if self.para.rank == 0:
-                info_global += f"Train:\n" +\
+                info_global += f"Test:\n" +\
                     f"    MSE(eV^2): {mse_global:.7f}    MAX: {mse_global_max:.7f}    MIN: {mse_global_min:.7f}\n" +\
                     f"    MAE(eV):   {mae_global:.7f}    MAX: {mae_global_max:.7f}    MIN: {mae_global_min:.7f}\n"
 
@@ -261,7 +261,8 @@ class Kernel(torch.nn.Module):
                              broadcast_buffers=False,
                              gradient_as_bucket_view=True)
         else:
-            self.model = DDP(self.model, output_device=self.para.local_rank,
+            self.model = DDP(self.model,
+                             #  output_device=self.para.local_rank,
                              broadcast_buffers=False,
                              gradient_as_bucket_view=True)
         self.optimizer = getattr(torch.optim, self.para.optimizer)(self.model.parameters(),
@@ -270,7 +271,7 @@ class Kernel(torch.nn.Module):
         if self.para.lr_scheduler == "ExponentialLR":
             self.lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=self.para.gamma)
         elif self.para.lr_scheduler == "ReduceLROnPlateau":
-            self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode="min", factor=self.para.factor, patience=self.para.patience, threshold=para.threshold)
+            self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode="min", factor=self.para.factor, patience=self.para.patience, threshold=self.para.threshold)
 
         if self.para.init_from_checkpoint is not None:
             checkpoint = torch.load(self.para.init_from_checkpoint, map_location="cpu")

@@ -72,7 +72,7 @@ class LossRecord():
     def global_loss(self, device):
         globel_info = torch.tensor([self.__mse, self.__mae, self.__num_ele], device=device)
         dist.all_reduce(globel_info, op=dist.ReduceOp.SUM)
-        mse_global = (globel_info[0]/globel_info[2])**0.5
+        mse_global = globel_info[0]/globel_info[2]
         mae_global = globel_info[1]/globel_info[2]
         return mse_global, mae_global
 
