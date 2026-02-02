@@ -44,8 +44,9 @@ class Kernel(torch.nn.Module):
             self.profile()
 
     def train(self):
-        if self.checkpoint_info is not None:
-            print(self.checkpoint_info)
+        if self.para.rank == 0:
+            if self.checkpoint_info is not None:
+                print(self.checkpoint_info)
 
         for epoch in range(self.start_epoch, self.start_epoch+self.para.epoch):
             self.model.train()
@@ -76,9 +77,6 @@ class Kernel(torch.nn.Module):
             if ((epoch+1) % self.para.checkpoint_interval == 0):
                 self.model.eval()
                 with torch.no_grad():
-                    if self.para.rank == 0:
-                        self.save_checkpoint(epoch)
-
                     for data in self.valsetloader:
                         data.to(self.device)
                         H_block, GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
@@ -95,9 +93,12 @@ class Kernel(torch.nn.Module):
                         test_loss_MSE, test_loss_MAE, num_ele = self.lossfunction.trainloss_ham(H_block, GraphEdgeIndex_to_BlockEdgeIndex, self.model.module.AtomType_OrbitalSum, data)
                         self.test_lossrecord.update(test_loss_MSE.item(), test_loss_MAE.item(), num_ele)
 
-                    mse_global, mae_global = self.train_lossrecord.global_loss(self.device)
+                    mse_global, mae_global = self.test_lossrecord.global_loss(self.device)
                     if self.para.rank == 0:
                         info_global += f"   Test_MSE: {mse_global:.7f}   Test_MAE: {mae_global:.7f}"
+
+                if self.para.rank == 0:
+                    self.save_checkpoint(epoch)
 
             if self.para.lr_scheduler == "ExponentialLR":
                 self.lr_scheduler.step()
