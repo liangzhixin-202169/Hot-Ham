@@ -15,6 +15,23 @@ def device_synchronize(input: dict):
         torch.cuda.synchronize()
 
 
+def init_distribution(para: Parameters):
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    if para["device"] == "cuda":
+        torch.cuda.set_device(local_rank)
+        device = torch.device("cuda", local_rank)
+        dist.init_process_group(backend="gloo")
+    else:
+        dist.init_process_group(backend="gloo")
+        device = torch.device("cpu")
+
+    para["rank"] = rank
+    para["local_rank"] = local_rank
+    para["device"] = device
+    para["world_size"] = dist.get_world_size()
+
+
 def main():
     # input parameters
     parser = argparse.ArgumentParser()
@@ -25,17 +42,6 @@ def main():
     with open(args.inputfile, "r") as f:
         input = json5.load(f)
 
-    # initialize distribution
-    rank = int(os.environ["RANK"])
-    local_rank = int(os.environ["LOCAL_RANK"])
-    if torch.cuda.is_available():
-        torch.cuda.set_device(local_rank)
-        device = torch.device("cuda", local_rank)
-        dist.init_process_group(backend="nccl")
-    else:
-        dist.init_process_group(backend="gloo")
-        device = torch.device("cpu")
-
     # seet random seed
     if input.get("seed", None) != None:
         set_seed(input["seed"])
@@ -44,15 +50,11 @@ def main():
     device_synchronize(input)
     time_begin = time()
     para = Parameters(input)
-    if para.device != "cpu":
-        para.rank = rank
-        para.local_rank = local_rank
-        para.device = device
-        para.world_size = dist.get_world_size()
+    init_distribution(para)
     kernel = Kernel(para)
     device_synchronize(input)
     time_finish = time()
-    if rank == 0:
+    if para.rank == 0:
         print("-"*50+f"\nTime used for initialization = {time_finish-time_begin:.3f} s.\n"+"-"*50)
 
     # run
@@ -61,7 +63,7 @@ def main():
     kernel.run()
     device_synchronize(input)
     time_finish = time()
-    if rank == 0:
+    if para.rank == 0:
         print("-"*50+f"\nTime used for training = {time_finish-time_begin:.3f} s.\n"+"-"*50)
 
     # finish

@@ -46,7 +46,11 @@ class Kernel(torch.nn.Module):
             self.model = Model(para=para)
             self.model.to(device=self.device)
             if self.device.type == "cuda":
-                self.model = DDP(self.model, device_ids=[self.para.local_rank])
+                self.model = DDP(self.model,
+                                 device_ids=[self.para.local_rank],
+                                 output_device=self.para.local_rank,
+                                 broadcast_buffers=False,
+                                 gradient_as_bucket_view=True)
             else:
                 self.model = DDP(self.model)
             self.optimizer = getattr(torch.optim, para.optimizer)(self.model.parameters(),

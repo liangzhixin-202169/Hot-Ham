@@ -20,7 +20,7 @@ class DatasetPrepocess:
                 setattr(self, dataset, DATACLASS(para, para[dataset]).dataset)
             else:
                 setattr(self, dataset, [])
-            shuffle = para.shuffile if dataset == "trainset" else False
+            shuffle = para.shuffle if dataset == "trainset" else False
             sampler = DistributedSampler(getattr(self, dataset),
                                          shuffle=shuffle,
                                          drop_last=False)
