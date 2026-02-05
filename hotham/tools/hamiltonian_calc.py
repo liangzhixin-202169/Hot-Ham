@@ -15,30 +15,33 @@ class Hamiltonian_Calc(Base_Calc):
 
     def calculation(self, data: Data, structure_idx: int):
         save_dict = {
-            "AtomType": data.AtomType.to("cpu").numpy(),
-            "AtomType_OrbitalSum": self.model.AtomType_OrbitalSum.to("cpu").numpy(),
-            "offset": data.offset.to("cpu").numpy(),
+            "AtomType": data.AtomType,
+            "AtomType_OrbitalSum": self.model.AtomType_OrbitalSum,
+            "offset": data.offset,
             "n_type": self.model.num_atomtype,
-            "lattice": data.lattice.to("cpu").numpy(),
-            "pos": data.pos.to("cpu").numpy(),
-            "edge_index": data.edge_index_hop.to("cpu").numpy(),
-            "inv_edge_index": data.edge_inverse.to("cpu").numpy(),
-            "D": data.D_hop.to("cpu").numpy(),
-            "d": data.d_hop.to("cpu").numpy(),
-            "S": data.S_hop.to("cpu").numpy(),
-            "unique_cell_shift": data.unique_cell_shift.to("cpu").numpy(),
-            "cell_shift_index": data.cell_shift_index.to("cpu").numpy()
+            "lattice": data.lattice,
+            "pos": data.pos,
+            "edge_index": data.edge_index_hop,
+            "inv_edge_index": data.edge_inverse,
+            "D": data,
+            "d": data,
+            "S": data,
+            "unique_cell_shift": data.unique_cell_shift,
+            "cell_shift_index": data.cell_shift_index,
+            "AtomSymbol_to_AtomType": self.model.AtomSymbol_to_AtomType,
+            "AtomType_to_AtomSymbol": self.model.AtomType_to_AtomSymbol
         }
 
         if "HR" in data:
-            save_dict["H_ref"] = self.tensor2numpy(data.HR)
+            save_dict["H_ref"] = data.HR
         if "SR" in data:
-            save_dict["SR"] = self.tensor2numpy(data.SR)
+            save_dict["SR"] = data.SR
 
         data.to(self.device)
-        HPred_block, self.GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
-        save_dict["H_pred"] = self.tensor2numpy(HPred_block)
+        HPred_block, _ = self.model(data)
+        save_dict["H_pred"] = HPred_block
 
+        save_dict = self.tensor2numpy(save_dict)
         np.save("HS.npy", save_dict)
 
     def run(self):
