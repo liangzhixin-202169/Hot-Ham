@@ -1,6 +1,6 @@
 import torch
-from entrypoints.model import Model
-from tools.input_calc import Input_Calc
+from ..entrypoints.model import Model
+from .input_calc import Input_Calc
 
 
 class Base_Calc(object):
@@ -52,6 +52,19 @@ class Base_Calc(object):
                     continue
 
         return current_version
+
+    @classmethod
+    def tensor2numpy(cls, data):
+        if isinstance(data, torch.Tensor):
+            return data.to("cpu").numpy()
+        elif isinstance(data, dict):
+            for k, v in data.items():
+                data[k] = cls.tensor2numpy(v)
+            return data
+        elif isinstance(data, list):
+            for i, e in enumerate(data):
+                data[i] = cls.tensor2numpy(e)
+            return data
 
 
 if __name__ == "__main__":

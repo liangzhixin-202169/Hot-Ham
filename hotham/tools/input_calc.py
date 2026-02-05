@@ -55,4 +55,4 @@ if __name__ == "__main__":
     import json5
     with open(sys.argv[1], "r") as f:
         inputfile = json5.load(f)
-    para = Input(inputfile)
+    para = Input_Calc(inputfile)
