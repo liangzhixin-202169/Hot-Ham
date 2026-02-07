@@ -51,6 +51,7 @@ class BaseModel(nn.Module):
         self.AtomType_OrbitalSum = torch.tensor(list(map(lambda x: self.AtomType_OrbitalIrreps[x].dim, sorted(self.AtomType_OrbitalIrreps))), dtype=self.para.intdtype).to(self.device)
         self.AtomSymbol_to_OrbitlSum = basicinfo.AtomSymbol_to_OrbitlSum
         self.AtomSymbol_to_OrbitalNum = {self.AtomType_to_AtomSymbol[atomtype]: obnum for atomtype, obnum in enumerate(self.AtomType_OrbitalNum)}
+        self.AtomSymbol_to_AMList = basicinfo.AtomSymbol_to_AMList
 
         self.CommonOrbitalIrreps = find_common_AM(self.AtomType_OrbitalIrrepsList)
         self.CommonAM = self.CommonOrbitalIrreps.ls

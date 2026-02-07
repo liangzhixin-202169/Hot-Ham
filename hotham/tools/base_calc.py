@@ -65,6 +65,23 @@ class Base_Calc(object):
             for i, e in enumerate(data):
                 data[i] = cls.tensor2numpy(e)
             return data
+        else:
+            return data
+
+    @classmethod
+    def tensor2tensor(cls, data, device):
+        if isinstance(data, torch.Tensor):
+            return data.to(device)
+        elif isinstance(data, dict):
+            for k, v in data.items():
+                data[k] = cls.tensor2tensor(v, device)
+            return data
+        elif isinstance(data, list):
+            for i, e in enumerate(data):
+                data[i] = cls.tensor2tensor(e, device)
+            return data
+        else:
+            return data
 
 
 if __name__ == "__main__":

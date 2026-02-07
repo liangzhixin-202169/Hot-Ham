@@ -35,8 +35,8 @@ def find_inverse_index(I, J, S):
 def find_cell_shfit_index(S):
     unique_S = np.unique(S, axis=0)
     unique_S_tuple = [tuple(s.tolist()) for s in unique_S]
-    unique_S_tuple_sort = sorted(unique_S_tuple)
-    mapping = {s: i for i, s in enumerate(unique_S_tuple_sort)}
+    # unique_S_tuple_sort = sorted(unique_S_tuple)
+    mapping = {s: i for i, s in enumerate(unique_S_tuple)}
     S_index = np.array([mapping[tuple(s.tolist())] for s in S])
     return unique_S, S_index
 
@@ -550,7 +550,7 @@ class OpenmxData(DataBase):
         return SR
 
     def get_HS(self, filename):
-        HR, iHR, SR = {}, {}, {}
+        HR, iHR, SR, rR = {}, {}, {}, {}
         SpinP_switch = -1
         with open(filename, "r") as fid:
             line = fid.readline()
@@ -570,12 +570,24 @@ class OpenmxData(DataBase):
                     iHR[spin] = self.get_Hamiltonian(fid)
 
                 # read SR
-                elif "Overlap" in line:
+                elif "Overlap matrix" in line:
                     SR = self.get_Overlap(fid)
+
+                # read rR x
+                elif "Overlap x matrix" in line:
+                    rR["x"] = self.get_Overlap(fid)
+
+                # read rR y
+                elif "Overlap y matrix" in line:
+                    rR["y"] = self.get_Overlap(fid)
+
+                # read rR z
+                elif "Overlap z matrix" in line:
+                    rR["z"] = self.get_Overlap(fid)
 
                 line = fid.readline()
         assert len(HR) == (SpinP_switch+1)
-        return HR, iHR, SR
+        return HR, iHR, SR, rR
 
     def get_wigner_D(self, order: Union[int, List[int]]):
         """
@@ -606,22 +618,28 @@ class OpenmxData(DataBase):
         DirectSum = scipy.linalg.block_diag(*[D[l] for l in order])
         return DirectSum
 
-    def openmx2hotham(self, HR: dict, iHR: dict, SR: dict, AtomType: np.array, cell_shift: np.array, edge_index: np.array):
+    def openmx2hotham(self, HR: dict, iHR: dict, SR: dict, rR: dict, AtomType: np.array, cell_shift: np.array, edge_index: np.array):
         # Hamiltonian  (spin, key, orbit_0, oribit_1)->(n_type, n_type, edge, spin, orbit_0, oribit_1)
         # iHamiltonian (spin, key, orbit_0, oribit_1)->(n_type, n_type, edge, spin, orbit_0, oribit_1)
         # overlap            (key, orbit_0, oribit_1)->(n_type, n_type, edge,       orbit_0, oribit_1)
-        has_HR, has_iHR, has_SR = False, False, False
-        H_block, iH_block, S_block = {}, {}, {}
+        has_HR, has_iHR, has_SR, has_rR = False, False, False, False
+        H_block, iH_block, S_block, rR_block = {}, {}, {}, {}
+
+        def create_pair_dict(symbols):
+            return {s0: {s1: [] for s1 in symbols} for s0 in symbols}
+
         if len(HR) > 0:
             has_HR = True
-            # H_block = [[[] for _ in range(self.n_type)] for _ in range(self.n_type)]
-            H_block = {s0: {s1: [] for s1 in self.AtomSymbol_to_AtomType} for s0 in self.AtomSymbol_to_AtomType}
+            H_block = create_pair_dict(self.AtomSymbol_to_AtomType.keys())
         if len(iHR) > 0:
             has_iHR = True
-            iH_block = {s0: {s1: [] for s1 in self.AtomSymbol_to_AtomType} for s0 in self.AtomSymbol_to_AtomType}
+            iH_block = create_pair_dict(self.AtomSymbol_to_AtomType.keys())
         if len(SR) > 0:
             has_SR = True
-            S_block = {s0: {s1: [] for s1 in self.AtomSymbol_to_AtomType} for s0 in self.AtomSymbol_to_AtomType}
+            S_block = create_pair_dict(self.AtomSymbol_to_AtomType.keys())
+        if len(rR) > 0:
+            has_rR = True
+            rR_block = {k: create_pair_dict(self.AtomSymbol_to_AtomType.keys()) for k in rR}
         for index in range(edge_index.shape[1]):
             s1, s2, s3 = cell_shift[index]
             n1, n2 = edge_index.T[index]
@@ -639,6 +657,10 @@ class OpenmxData(DataBase):
             if has_SR:
                 S_o1_o2 = SR[key]
                 S_block[atomsymbol_1][atomsymbol_2].append(S_o1_o2)
+            if has_rR:
+                for direction in rR:
+                    rR_d_o1_o2 = rR[direction][key]
+                    rR_block[direction][atomsymbol_1][atomsymbol_2].append(rR_d_o1_o2)
 
         for atomtype_1 in range(self.n_type):
             atomsymbol_1 = self.AtomType_to_AtomSymbol[atomtype_1]
@@ -655,8 +677,13 @@ class OpenmxData(DataBase):
                 if has_SR and (len(S_block[atomsymbol_1][atomsymbol_2]) != 0):
                     S_block[atomsymbol_1][atomsymbol_2] = np.stack(S_block[atomsymbol_1][atomsymbol_2])
                     S_block[atomsymbol_1][atomsymbol_2] = np.einsum("ij,zjk,kl->zil", winger_D_1.T, S_block[atomsymbol_1][atomsymbol_2], winger_D_2)
+                if has_rR:
+                    for direction in rR_block:
+                        if len(rR_block[direction][atomsymbol_1][atomsymbol_2]) != 0:
+                            rR_block[direction][atomsymbol_1][atomsymbol_2] = np.stack(rR_block[direction][atomsymbol_1][atomsymbol_2])
+                            rR_block[direction][atomsymbol_1][atomsymbol_2] = np.einsum("ij,zjk,kl->zil", winger_D_1.T, rR_block[direction][atomsymbol_1][atomsymbol_2], winger_D_2)
 
-        return H_block, iH_block, S_block
+        return H_block, iH_block, S_block, rR_block
 
     def get_data(self):
         dataset = []
@@ -681,7 +708,7 @@ class OpenmxData(DataBase):
 
             # Hamiltonian (spin, key, orbit_0, oribit_1)
             # overlap     (key, orbit_0, oribit_1)
-            HR, iHR, SR = self.get_HS(HS_file)
+            HR, iHR, SR, rR = self.get_HS(HS_file)
 
             # infer neighbor list from HR[0]
             if len(HR) > 0:
@@ -698,7 +725,7 @@ class OpenmxData(DataBase):
             # Hamiltonian  (n_type, n_type, edge, spin, orbit_0, oribit_1)
             # iHamiltonian (n_type, n_type, edge, spin, orbit_0, oribit_1)
             # overlap      (n_type, n_type, edge,       orbit_0, oribit_1)
-            HR, iHR, SR = self.openmx2hotham(HR=HR, iHR=iHR, SR=SR, AtomType=AtomType, cell_shift=cell_shift, edge_index=edge_index)
+            HR, iHR, SR, rR = self.openmx2hotham(HR=HR, iHR=iHR, SR=SR, rR=rR, AtomType=AtomType, cell_shift=cell_shift, edge_index=edge_index)
 
             # atom_type's orbit number
             # Hamiltonian and overlap start index for each atom
@@ -740,6 +767,8 @@ class OpenmxData(DataBase):
                 data["iHR"] = numpy2tensor(iHR, "cpu")
             if len(SR) != 0:
                 data["SR"] = numpy2tensor(SR, "cpu")
+            if len(rR) != 0:
+                data["rR"] = numpy2tensor(rR, "cpu")
             dataset.append(data)
         return dataset
 
