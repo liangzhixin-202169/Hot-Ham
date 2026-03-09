@@ -237,6 +237,7 @@ class ToPyatb(Base_Calc):
             h_pred, _ = self.model(data)
             h_pred = self.tensor2tensor(h_pred, "cpu")
             h_pred = self.rotate2abacus(h_pred, AtomType)
+            data.to("cpu")
             h_pred, dim_matrix = self.block_r(h_pred, data)
             with open("h_pred.csr", "w") as f:
                 f.write(f"STEP: 0\n")

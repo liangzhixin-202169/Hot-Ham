@@ -38,6 +38,8 @@ class Base_Calc(object):
                 for word in words:
                     word = Name_Convertion.get(word, word)
                     new_words.append(word)
+                if "module" in new_words:
+                    new_words = new_words[1:]
                 new_key = ".".join(new_words)
                 assert new_key in current_keys
                 current_version[new_key] = old_version[key]

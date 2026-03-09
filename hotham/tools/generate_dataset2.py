@@ -417,7 +417,7 @@ class AbacusData(DataBase):
 
     def get_data(self):
         dataset = []
-        for root, _, files in os.walk(self.dataset):
+        for root, _, files in os.walk(self.dataset, followlinks=True):
             HS_file = {"H0_file": None, "H1_file": None, "S_file": None}
             if "data-HR-sparse_SPIN0.csr" in files:
                 HS_file["H0_file"] = os.path.join(root, "data-HR-sparse_SPIN0.csr")
@@ -688,7 +688,7 @@ class OpenmxData(DataBase):
     def get_data(self):
         dataset = []
         paths = []
-        for root, _, files in os.walk(self.dataset):
+        for root, _, files in os.walk(self.dataset, followlinks=True):
             if "Hks.txt" in files:
                 HS_file = os.path.join(root, "Hks.txt")
             elif "overlap.txt" in files:
