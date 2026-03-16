@@ -378,16 +378,16 @@ class AbacusData(DataBase):
         def create_pair_dict(symbols):
             return {s0: {s1: [] for s1 in symbols} for s0 in symbols}
 
-        if len(HR):
+        if len(HR) > 0:
             has_HR = True
             H_block = create_pair_dict(self.AtomSymbol_to_AtomType.keys())
-        if len(iHR):
+        if len(iHR) > 0:
             has_iHR = True
             iH_block = create_pair_dict(self.AtomSymbol_to_AtomType.keys())
-        if len(SR):
+        if len(SR) > 0:
             has_SR = True
             S_block = create_pair_dict(self.AtomSymbol_to_AtomType.keys())
-        if len(rR):
+        if len(rR) > 0:
             has_rR = True
             rR_block = {k: create_pair_dict(self.AtomSymbol_to_AtomType.keys()) for k in rR}
 
@@ -562,11 +562,11 @@ class AbacusData(DataBase):
             #         "unique_cell_shift": unique_cell_shift,
             #         "cell_shift_index": cell_shift_index}
             if len(HR) != 0:
-                data["HR"] = HR
+                data["HR"] = numpy2tensor(HR, "cpu")
             if len(iHR) != 0:
-                data["iHR"] = iHR
+                data["iHR"] = numpy2tensor(iHR, "cpu")
             if len(SR) != 0:
-                data["SR"] = SR
+                data["SR"] = numpy2tensor(SR, "cpu")
             if len(rR) != 0:
                 data["rR"] = numpy2tensor(rR, "cpu")
             dataset.append(data)
