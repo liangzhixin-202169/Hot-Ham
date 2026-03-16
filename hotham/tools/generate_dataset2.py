@@ -1,4 +1,3 @@
-from matplotlib.backend_tools import ToolQuitAll
 import numpy as np
 import torch
 from torch_geometric.data import Data
@@ -13,7 +12,6 @@ import os
 import re
 from typing import Union, List
 from abc import ABC
-import h5py
 from io import TextIOWrapper
 from e3nn import o3
 from tqdm import tqdm
