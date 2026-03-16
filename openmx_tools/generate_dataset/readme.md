@@ -14,4 +14,4 @@ openmx2hotham file.scfout property_0 property_1 ... > Hks.txt
 then these properties will be saved in Hks.txt with Hot-Ham format. Now the supported properties includes:
  - Hamiltonian: `ham`
  - Overlap: `olp`
- - Real space position matrix: `rr`.
+ - Real space position matrix: `rr`
