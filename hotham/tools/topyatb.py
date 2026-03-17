@@ -146,8 +146,8 @@ class ToPyatb(Base_Calc):
             olp, dim_matrix = self.block_r(olp, data)
             with open("olp.csr", "w") as f:
                 f.write(f"STEP: 0\n")
-                f.write(f"Matrix Dimension of H(R): {dim_matrix}\n")
-                f.write(f"Matrix number of H(R): {n_cell}\n")
+                f.write(f"Matrix Dimension of S(R): {dim_matrix}\n")
+                f.write(f"Matrix number of S(R): {n_cell}\n")
 
                 for i_cell in range(n_cell):
                     cell_shift = unique_cell_shift[i_cell].tolist()
