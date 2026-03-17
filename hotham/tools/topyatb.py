@@ -152,7 +152,7 @@ class ToPyatb(Base_Calc):
                 for i_cell in range(n_cell):
                     cell_shift = unique_cell_shift[i_cell].tolist()
                     mr = olp[i_cell]
-                    mr = (mr/Rydberg).to_sparse_csr()
+                    mr = mr.to_sparse_csr()
                     row_ptr = mr.crow_indices()
                     col_ind = mr.col_indices()
                     values = mr.values()
