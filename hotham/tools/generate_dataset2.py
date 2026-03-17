@@ -165,7 +165,7 @@ class DataBase(ABC):
         # R@((0,1,0).T) = (y,z,x).T
         try:
             import hotham
-            self.Jd = torch.load(os.path.join(hotham.__file__, "utilities/Jd.pt"))
+            self._Jd = torch.load(os.path.join(hotham.__path__[0], "utilities/Jd.pt"))
         except:
             self._Jd = torch.load("D:/Users/lzx/source/repos/Hot-Ham/hotham/utilities/Jd.pt")
         # self._Jd = torch.load("/fs08/home/js_liangzx/anaconda3/envs/deep/apps/hotham/utilities/Jd.pt")
@@ -543,8 +543,8 @@ class AbacusData(DataBase):
                 D_hop=D.to(self.floatdtype),
                 d_hop=d.to(self.floatdtype),
                 S_hop=S.to(self.floatdtype),
-                unique_cell_shift=unique_cell_shift,
-                cell_shift_index=cell_shift_index
+                unique_cell_shift=torch.from_numpy(unique_cell_shift).to(self.intdtype),
+                cell_shift_index=torch.from_numpy(cell_shift_index).to(self.intdtype)
             )
             # data = {"AtomType": AtomType,
             #         "AtomType_OrbitalSum": self.AtomType_OrbitalSum,
@@ -905,7 +905,7 @@ class GraphData(DataBase):
 
 if __name__ == "__main__":
     inputfile = {
-        "trainset": "./data",
+        "trainset": ".",
         # "testset": "./data/testset",
         # "valset": "./data/valset",
         "dft": "abacus",
@@ -916,10 +916,10 @@ if __name__ == "__main__":
             "O": ["1s", "2s", "2p", "3p", "3d"],
         },
         "cutoff": {
-            "H": 7.5,
-            "C": 7.5,
-            "N": 7.5,
-            "O": 7.5,
+            "H": 8,
+            "C": 8,
+            "N": 8,
+            "O": 8,
         },
         "L_max": 5,
         "using_CoordinateTransformation": True,
