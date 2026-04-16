@@ -30,7 +30,7 @@ def init_distribution(para: Parameters):
     para["local_rank"] = local_rank
     para["device"] = device
     para["world_size"] = dist.get_world_size()
-    para["lr"] = para["lr"]*para["world_size"]
+    # para["lr"] = para["lr"]*para["world_size"]
 
 
 def main():
