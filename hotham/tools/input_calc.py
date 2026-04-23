@@ -22,9 +22,9 @@ class Input_Calc(dict):
         default_dict["model_path"] = "./model.pth"
         default_dict["ref_band"] = None
 
-        default_dict["intdtype"] = torch.int32
-        default_dict["floatdtype"] = torch.float32
-        default_dict["complexdtype"] = torch.complex64
+        default_dict["intdtype"] = "int32"
+        default_dict["floatdtype"] = "float32"
+        default_dict["complexdtype"] = "complex64"
         default_dict["device"] = "cpu"
 
         default_dict["band_energy_min"] = None
