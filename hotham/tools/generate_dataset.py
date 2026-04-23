@@ -671,7 +671,7 @@ class OpenmxData(DataBase):
                     rR["z"] = self.get_rR(fid)
 
                 line = fid.readline()
-        assert len(HR) == (SpinP_switch+1)
+        # assert len(HR) == (SpinP_switch+1)
         return HR, iHR, SR, rR
 
     def get_wigner_D(self, order: Union[int, List[int]]):

@@ -11,6 +11,8 @@ class Input_Calc(dict):
     def set_default_parameters(self):
         default_dict = {}
 
+        default_dict["model_type"] = 0
+        default_dict["prediction"] = 1
         default_dict["edge_include_sc"] = True
         default_dict["using_CoordinateTransformation"] = True
         default_dict["split_stru"] = 0
@@ -20,8 +22,9 @@ class Input_Calc(dict):
         default_dict["model_path"] = "./model.pth"
         default_dict["ref_band"] = None
 
-        default_dict["intdtype"] = torch.int32,
-        default_dict["floatdtype"] = torch.float32,
+        default_dict["intdtype"] = torch.int32
+        default_dict["floatdtype"] = torch.float32
+        default_dict["complexdtype"] = torch.complex64
         default_dict["device"] = "cpu"
 
         default_dict["band_energy_min"] = None
@@ -31,6 +34,11 @@ class Input_Calc(dict):
         default_dict["valset"] = None
         default_dict["dft"] = None
         default_dict["shuffle"] = False
+
+        default_dict["using_layernorm"] = True
+        default_dict["using_layernorm2"] = False
+        default_dict["restrict_last_out"] = True
+        default_dict["using_rearrangement_linear"] = True
 
         return default_dict
 

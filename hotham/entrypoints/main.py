@@ -1,6 +1,7 @@
 import os
 import argparse
 import json5
+import yaml
 from time import time
 import torch
 import torch.distributed as dist
@@ -40,8 +41,12 @@ def main():
     args = parser.parse_args()
 
     assert os.path.exists(args.inputfile)
-    with open(args.inputfile, "r") as f:
-        input = json5.load(f)
+    if args.inputfile.endswith(".json"):
+        with open(args.inputfile, "r", encoding='utf-8') as f:
+            input = json5.load(f)
+    elif args.inputfile.endswith(".yaml"):
+        with open(args.inputfile, "r", encoding='utf-8') as f:
+            input = yaml.safe_load(f)
 
     # seet random seed
     if input.get("seed", None) != None:
