@@ -165,15 +165,18 @@ class E3LayerNormal(torch.nn.Module):
 
 
 class MyScatter(torch.nn.Module):
-    def __init__(self, fix_average: bool = False, N_average=None):
+    # def __init__(self, fix_average: bool = False, N_average=None):
+    def __init__(self, N_average=None):
         super().__init__()
-        self.fix_average = fix_average
+        # self.fix_average = fix_average
         self.register_buffer("N_average", torch.tensor(-1.0, dtype=torch.float32))
-        if fix_average:
-            self.N_average = N_average
+        # if fix_average:
+        #     self.N_average = N_average
+        self.N_average = N_average
 
     def forward(self, src: torch.Tensor, index: torch.Tensor, dim: int, dim_size: int):
-        if self.fix_average:
+        # if self.fix_average:
+        if self.N_average > 0:
             out = scatter(src, index, dim=dim, dim_size=dim_size, reduce="sum")/self.N_average
         else:
             out = scatter(src, index, dim=dim, dim_size=dim_size, reduce="mean")

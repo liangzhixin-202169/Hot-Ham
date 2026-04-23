@@ -241,7 +241,7 @@ class SO2OutputLayer(torch.nn.Module):
         self.irreps_out = irreps_out
         self.basis_size = basis_size
         self.split_stru = para.split_stru
-        self.scatter = MyScatter(para.fix_average, para.N_average)
+        self.scatter = MyScatter(para.N_average)
         self.irreps_sh = MCST(self.irreps_node.lmax, 1, 1)
 
         # self_connection

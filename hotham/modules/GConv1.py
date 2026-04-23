@@ -371,7 +371,7 @@ class GauntConvolution(torch.nn.Module):
         self.split_stru = split_stru
         self.using_layernorm2 = para.using_layernorm2
         # self.fix_average = para.fix_average
-        self.scatter = MyScatter(para.fix_average, para.N_average)
+        self.scatter = MyScatter(para.N_average)
 
         ##############################################################################################################################################
         # Split irreps_in and irreps_out according to even and parity, such that irreps == "Cex0e+Cex1o+Cex2e+..." + "Cox0o+Cox1e+Cox2o+...".

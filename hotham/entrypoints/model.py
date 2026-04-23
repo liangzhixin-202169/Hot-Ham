@@ -28,7 +28,7 @@ class Model(BaseModel):
             self.layer_irreps[-1] = o3.Irreps([irs for irs in self.layer_irreps[-1] if irs[1].l <= self.edge_irreps_output.lmax])
 
         # Define scatter function
-        self.scatter = MyScatter(para.fix_average, para.N_average)
+        self.scatter = MyScatter(para.N_average)
 
         # Embedding
         self.node_emb = NodeEmbedding(self.num_atomtype)
@@ -58,12 +58,12 @@ class Model(BaseModel):
             from ..modules.GConv1 import GauntConvolution as GeneralConvolution
         for layer_index in range(self.convblock_num):
             layer = GeneralConvolution(irreps_node=self.layer_irreps[layer_index],
-                                      irreps_out=self.layer_irreps[layer_index+1],
-                                      num_type=self.num_atomtype,
-                                      basis_size=self.basis_size,
-                                      sh_channel=1,
-                                      split_stru=self.para.split_stru,
-                                      para=para)
+                                       irreps_out=self.layer_irreps[layer_index+1],
+                                       num_type=self.num_atomtype,
+                                       basis_size=self.basis_size,
+                                       sh_channel=1,
+                                       split_stru=self.para.split_stru,
+                                       para=para)
             GauntConv_layer.append(layer)
 
             if self.using_layernorm:

@@ -18,7 +18,7 @@ class Parameters(dict):
         default_dict = {}
 
         default_dict["model_type"] = 0
-        default_dict["batch_size"] = None
+        default_dict["batch_size"] = 1
         default_dict["prediction"] = 0
 
         default_dict["intdtype"] = "int64"
@@ -41,6 +41,7 @@ class Parameters(dict):
         default_dict["dft"] = None
 
         # optimizer
+        default_dict["lr"] = 0.05
         default_dict["optimizer"] = "AdamW"
         default_dict["lambda_2"] = 0
         default_dict["lr_scheduler"] = "ReduceLROnPlateau"
