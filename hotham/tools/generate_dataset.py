@@ -915,15 +915,14 @@ if __name__ == "__main__":
             "N": ["1s", "2s", "2p", "3p", "3d"],
             "O": ["1s", "2s", "2p", "3p", "3d"],
         },
+        "L_max": 5,
+        # only used by AbacusData
         "cutoff": {
             "H": 8,
             "C": 8,
             "N": 8,
             "O": 8,
-        },
-        "L_max": 5,
-        "using_CoordinateTransformation": True,
-        "edge_include_sc": True,
+        }
     }
 
     param = Parameters(inputfile)

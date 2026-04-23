@@ -23,6 +23,7 @@ setup(
         "h5py==3.14.0",
         "json5==0.9.25",
         "tqdm"
+        "pyyaml"
     ],
     license="MIT",
     description="Hot-Ham: High-order Tensor machine-learning Hamiltonian",
