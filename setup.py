@@ -22,7 +22,7 @@ setup(
         "ase==3.25.0",
         "h5py==3.14.0",
         "json5==0.9.25",
-        "tqdm"
+        "tqdm",
         "pyyaml"
     ],
     license="MIT",
