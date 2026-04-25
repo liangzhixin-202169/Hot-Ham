@@ -1,5 +1,7 @@
 import torch
+import torch.distributed as dist
 from ..entrypoints.Parameters import Parameters
+from ..modules.common import BasicInfo
 
 
 class LossRecord():
@@ -67,11 +69,29 @@ class LossRecord():
         self.__mse_min = 0.
         self.__mae_min = 0.
 
+    def global_loss(self, device):
+        globel_info = torch.tensor([self.__mse, self.__mae, self.__num_ele], device=device)
+        dist.all_reduce(globel_info, op=dist.ReduceOp.SUM)
+        mse_global = globel_info[0]/globel_info[2]
+        mae_global = globel_info[1]/globel_info[2]
+        return mse_global, mae_global
+
+    def global_max(self, device):
+        global_info = torch.tensor([self.mse_max, self.mae_max], device=device)
+        dist.all_reduce(global_info, op=dist.ReduceOp.MAX)
+        return global_info
+
+    def global_min(self, device):
+        global_info = torch.tensor([self.mse_min, self.mae_min], device=device)
+        dist.all_reduce(global_info, op=dist.ReduceOp.MIN)
+        return global_info
+
 
 class Lossfunction(object):
-    def __init__(self, para: Parameters):
+    def __init__(self, para: Parameters, basicinfo: BasicInfo):
         self.para = para
         self.device = para.device
+        self.basicinfo = basicinfo
 
     def trainloss_band(self, eig, eig_ref, band_weight):
         MSEloss = 0.0
@@ -99,14 +119,22 @@ class Lossfunction(object):
         return MSEloss.item(), MAEloss.item()
 
     def trainloss_ham(self, H_block, GraphEdgeIndex_to_BlockEdgeIndex, AtomType_OrbitalSum, data):
-        num_atomtype = torch.max(data.AtomType)+1
+        num_atomtype = self.basicinfo.n_type
+        unique_atomtypes = torch.unique(data.AtomType)
         MSEloss, MAEloss = 0.0, 0.0
         num_ele = 0
         for atomtype_1 in range(num_atomtype):
+            if atomtype_1 not in unique_atomtypes:
+                continue
+            atomsymbol_1 = self.basicinfo.AtomType_to_AtomSymbol[atomtype_1]
             for atomtype_2 in range(num_atomtype):
-                index_HBlcok = atomtype_1*num_atomtype+atomtype_2
-                h_pred = H_block[index_HBlcok]
-                h_ref = data.HR[index_HBlcok]
+                if atomtype_2 not in unique_atomtypes:
+                    continue
+                atomsymbol_2 = self.basicinfo.AtomType_to_AtomSymbol[atomtype_2]
+                h_pred = H_block[atomsymbol_1][atomsymbol_2]
+                h_ref = data.HR[atomsymbol_1][atomsymbol_2]
+                if h_ref.shape[1] == 1:
+                    h_ref = h_ref.squeeze(dim=1)
 
                 MSEloss += torch.sum(torch.pow((h_ref-h_pred), 2))
                 MAEloss += torch.sum(torch.abs(h_ref-h_pred))
@@ -115,14 +143,22 @@ class Lossfunction(object):
         return MSEloss/num_ele, MAEloss/num_ele, num_ele
 
     def testloss_ham(self, H_block, GraphEdgeIndex_to_BlockEdgeIndex, AtomType_OrbitalSum, data):
-        num_atomtype = torch.max(data.AtomType)+1
+        num_atomtype = self.basicinfo.n_type
+        unique_atomtypes = torch.unique(data.AtomType)
         MSEloss, MAEloss = 0.0, 0.0
         num_ele = 0
         for atomtype_1 in range(num_atomtype):
+            if atomtype_1 not in unique_atomtypes:
+                continue
+            atomsymbol_1 = self.basicinfo.AtomType_to_AtomSymbol[atomtype_1]
             for atomtype_2 in range(num_atomtype):
-                index_HBlcok = atomtype_1*num_atomtype+atomtype_2
-                h_pred = H_block[index_HBlcok]
-                h_ref = data.HR[index_HBlcok]
+                if atomtype_2 not in unique_atomtypes:
+                    continue
+                atomsymbol_2 = self.basicinfo.AtomType_to_AtomSymbol[atomtype_2]
+                h_pred = H_block[atomsymbol_1][atomsymbol_2]
+                h_ref = data.HR[atomsymbol_1][atomsymbol_2]
+                if h_ref.shape[1] == 1:
+                    h_ref = h_ref.squeeze(dim=1)
 
                 MSEloss += torch.sum(torch.pow((h_ref-h_pred), 2))
                 MAEloss += torch.sum(torch.abs(h_ref-h_pred))

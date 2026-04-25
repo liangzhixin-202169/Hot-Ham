@@ -1,4 +1,5 @@
 import torch
+from torch.utils.data.distributed import DistributedSampler
 from torch_geometric.loader import DataLoader
 from typing import Union
 from ..entrypoints.Parameters import Parameters
@@ -19,7 +20,27 @@ class DatasetPrepocess:
                 setattr(self, dataset, DATACLASS(para, para[dataset]).dataset)
             else:
                 setattr(self, dataset, [])
-            loader = DataLoader(getattr(self, dataset), batch_size=para.batch_size, shuffle=para.shuffle)
+            shuffle = para.shuffle if dataset == "trainset" else False
+            if "local_rank" in para:
+                shuffle = para.shuffle if dataset == "trainset" else False
+                sampler = DistributedSampler(getattr(self, dataset),
+                                             shuffle=shuffle,
+                                             drop_last=False)
+                loader = DataLoader(
+                    getattr(self, dataset),
+                    batch_size=para.batch_size,
+                    shuffle=False,
+                    sampler=sampler,
+                    num_workers=0 if para.device.type == "cpu" else 4,
+                    pin_memory=(para.device.type == "cuda")
+                )
+            else:
+                loader = DataLoader(
+                    getattr(self, dataset),
+                    batch_size=para.batch_size,
+                    shuffle=para.shuffle,
+                    pin_memory=(para.device == "cuda")
+                )
             loader_name = f"{dataset}_loader"
             setattr(self, loader_name, loader)
 

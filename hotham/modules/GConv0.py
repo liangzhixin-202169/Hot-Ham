@@ -382,7 +382,7 @@ class GauntConvolution(torch.nn.Module):
         self.lmax = self.irreps_node.lmax
         self.split_stru = split_stru
         self.using_layernorm2 = para.using_layernorm2
-        self.scatter = MyScatter(para.fix_average, para.N_average)
+        self.scatter = MyScatter(para.N_average)
         self.para = para
 
         ##############################################################################################################################################

@@ -18,13 +18,12 @@ class Parameters(dict):
         default_dict = {}
 
         default_dict["model_type"] = 0
-        default_dict["batch_size"] = None
+        default_dict["batch_size"] = 1
         default_dict["prediction"] = 0
 
-        default_dict["lambda_2"] = 0
-
-        default_dict["intdtype"] = torch.int64
-        default_dict["floatdtype"] = torch.float32
+        default_dict["intdtype"] = "int64"
+        default_dict["floatdtype"] = "float32"
+        default_dict["complexdtype"] = "complex64"
         default_dict["device"] = "cpu"
         default_dict["band_min"] = None
         default_dict["band_max"] = None
@@ -41,21 +40,33 @@ class Parameters(dict):
         default_dict["shuffle"] = False
         default_dict["dft"] = None
 
+        # optimizer
+        default_dict["lr"] = 0.05
+        default_dict["optimizer"] = "AdamW"
+        default_dict["lambda_2"] = 0
+        default_dict["lr_scheduler"] = "ReduceLROnPlateau"
+        default_dict["factor"] = 0.9
+        default_dict["patience"] = 50
+        default_dict["threshold"] = 0.5
+        default_dict["gamma"] = 0.999  # only used by ExponentialLR
+        default_dict["new_lr"] = None
+
         # Model init and save
         default_dict["init_from_model"] = None
         default_dict["init_from_checkpoint"] = None
         default_dict["save_interval"] = 100
         default_dict["checkpoint_interval"] = 100
-        default_dict["new_lr"] = None
-        default_dict["lr_scheduler"] = "ExponentialLR"
-        default_dict["threshold"] = 0.0001
 
-        # GTP conv params
+        # other params
         default_dict["using_CoordinateTransformation"] = True
         default_dict["split_stru"] = 0
         default_dict["Co"] = None
         default_dict["fix_average"] = False
         default_dict["N_average"] = torch.tensor(-1.0)
+        default_dict["using_layernorm"] = True
+        default_dict["using_layernorm2"] = False
+        default_dict["restrict_last_out"] = True
+        default_dict["using_rearrangement_linear"] = True
 
         return default_dict
 

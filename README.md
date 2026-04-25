@@ -18,6 +18,7 @@ The python version is recommended to be larger than 3.10, with following package
 - h5py
 - json5
 - tqdm
+- pyyaml
 
 ### **Hot-Ham** installation
 You can use pip:
