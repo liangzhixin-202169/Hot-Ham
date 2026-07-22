@@ -37,7 +37,7 @@ class Parameters(dict):
         default_dict["valset"] = None
         default_dict["testset"] = None
         default_dict["edge_include_sc"] = True
-        default_dict["shuffle"] = False
+        default_dict["shuffle"] = True
         default_dict["dft"] = None
 
         # optimizer

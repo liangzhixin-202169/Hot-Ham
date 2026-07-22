@@ -3,6 +3,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 import os
 import sys
+from ase.units import Rydberg, Bohr
 from ..entrypoints.Parameters import Parameters
 from ..entrypoints.Lossfun import LossRecord, Lossfunction
 from ..data.DatasetPreprocess import DatasetPrepocess
@@ -42,6 +43,10 @@ class Kernel(torch.nn.Module):
             self.eval()
         elif self.para.prediction == 2:
             self.profile()
+        elif self.para.prediction == 3:
+            self.topyatb()
+        else:
+            raise ValueError(f"Invalid prediction value: {self.para.prediction}. Must be 0, 1, 2, or 3.")
 
     def train(self):
         if self.para.rank == 0:
@@ -196,6 +201,250 @@ class Kernel(torch.nn.Module):
                     with torch.profiler.record_function("Optim Step"):
                         self.optimizer.step()
                 prof.step()
+    
+    def topyatb(self):
+        if self.para.rank != 0:
+            return
+        model = self.model.module if hasattr(self.model, "module") else self.model
+        model.eval()
+        if not hasattr(self.para, "write"):
+            raise AttributeError("para.write is required for prediction == 3")
+        with torch.no_grad():
+            for batch_idx, data in enumerate(self.trainloader):
+                AtomType = data.AtomType
+                unique_cell_shift = data.unique_cell_shift.cpu().numpy()
+                n_cell = len(unique_cell_shift)
+                def tensor2tensor(obj, device):
+                    if isinstance(obj, torch.Tensor):
+                        return obj.to(device)
+                    elif isinstance(obj, dict):
+                        return {k: tensor2tensor(v, device) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [tensor2tensor(v, device) for v in obj]
+                    else:
+                        return obj
+                def get_wigner_D(order):
+                    D = [
+                        torch.tensor([[1.0]]),
+                        torch.tensor([[0, 1, 0],
+                                      [0, 0, -1],
+                                      [-1, 0, 0]]),
+                        torch.tensor([[0, 0, 1, 0, 0],
+                                      [0, 0, 0, -1, 0],
+                                      [0, -1, 0, 0, 0],
+                                      [0, 0, 0, 0, 1],
+                                      [1, 0, 0, 0, 0]]),
+                        torch.tensor([[0, 0, 0, 1, 0, 0, 0],
+                                      [0, 0, 0, 0, -1, 0, 0],
+                                      [0, 0, -1, 0, 0, 0, 0],
+                                      [0, 0, 0, 0, 0, 1, 0],
+                                      [0, 1, 0, 0, 0, 0, 0],
+                                      [0, 0, 0, 0, 0, 0, -1],
+                                      [-1, 0, 0, 0, 0, 0, 0]])
+                    ]
+                    if isinstance(order, int):
+                        order = [order]
+                    return torch.block_diag(*[D[l] for l in order])
+
+                def rotate2abacus(block, AtomType):
+                    num_atomtype = model.num_atomtype
+                    unique_atomtypes = torch.unique(AtomType)
+                    AtomType_to_AtomSymbol = model.AtomType_to_AtomSymbol
+                    AtomSymbol_to_AMList = model.AtomSymbol_to_AMList
+
+                    for atomtype_1 in range(num_atomtype):
+                        if atomtype_1 not in unique_atomtypes:
+                            continue
+                        atomsymbol_1 = AtomType_to_AtomSymbol[atomtype_1]
+                        winger_D_1 = get_wigner_D(AtomSymbol_to_AMList[atomsymbol_1])
+
+                        for atomtype_2 in range(num_atomtype):
+                            if atomtype_2 not in unique_atomtypes:
+                                continue
+                            atomsymbol_2 = AtomType_to_AtomSymbol[atomtype_2]
+                            winger_D_2 = get_wigner_D(AtomSymbol_to_AMList[atomsymbol_2])
+
+                            block[atomsymbol_1][atomsymbol_2] = block[atomsymbol_1][atomsymbol_2].to(winger_D_1.dtype)
+                            shape = block[atomsymbol_1][atomsymbol_2].shape
+                            block[atomsymbol_1][atomsymbol_2] = block[atomsymbol_1][atomsymbol_2].reshape((-1,) + shape[-2:])
+                            block[atomsymbol_1][atomsymbol_2] = torch.einsum(
+                                "ij,zjk,kl->zil",
+                                winger_D_1,
+                                block[atomsymbol_1][atomsymbol_2],
+                                winger_D_2.T
+                            )
+                            block[atomsymbol_1][atomsymbol_2] = block[atomsymbol_1][atomsymbol_2].reshape(shape)
+
+                    return block
+
+                def block_r(block, data):
+                    num_atomtype = model.num_atomtype
+                    AtomType = data.AtomType
+                    unique_atomtypes = torch.unique(AtomType)
+                    AtomType_to_AtomSymbol = model.AtomType_to_AtomSymbol
+                    index_edge = data.edge_index_hop
+                    num_edge = index_edge.shape[1]
+                    unique_cell_shift_inner = data.unique_cell_shift
+                    cell_shift_index = data.cell_shift_index
+                    n_cell_inner = len(unique_cell_shift_inner)
+                    offset = data.offset
+                    AtomType_OrbitalSum = model.AtomType_OrbitalSum
+                    dim_matrix = int(sum(AtomType_OrbitalSum[atomtype].item() for atomtype in AtomType))
+
+                    Mr = torch.zeros((n_cell_inner, dim_matrix, dim_matrix), dtype=torch.float32)
+                    EdgeNumber = torch.arange(num_edge, dtype=torch.long)
+
+                    for atomtype_1 in range(num_atomtype):
+                        if atomtype_1 not in unique_atomtypes:
+                            continue
+                        atomsymbol_1 = AtomType_to_AtomSymbol[atomtype_1]
+
+                        for atomtype_2 in range(num_atomtype):
+                            if atomtype_2 not in unique_atomtypes:
+                                continue
+                            atomsymbol_2 = AtomType_to_AtomSymbol[atomtype_2]
+
+                            mr = block[atomsymbol_1][atomsymbol_2]
+                            mr = mr.squeeze(1)
+                            mask_12 = (AtomType[index_edge[0, :]] == atomtype_1) * (AtomType[index_edge[1, :]] == atomtype_2)
+                            edge_12 = EdgeNumber[mask_12]
+                            sub_cell_shift_index = cell_shift_index[edge_12]
+                            offset0 = offset[index_edge[0, edge_12]]
+                            offset1 = offset[index_edge[1, edge_12]]
+                            dim0, dim1 = mr.shape[-2:]
+
+                            for i in range(dim0):
+                                for j in range(dim1):
+                                    Mr[sub_cell_shift_index, offset0 + i, offset1 + j] = mr[:, i, j]
+
+                    return Mr, dim_matrix
+
+                prefix = "" if len(self.trainloader) == 1 else f"{batch_idx}_"
+
+                if "h_ref" in self.para.write:
+                    h_ref = rotate2abacus(data.HR, AtomType)
+                    h_ref, dim_matrix = block_r(h_ref, data)
+                    with open(f"{prefix}h_ref.csr", "w") as f:
+                        f.write("STEP: 0\n")
+                        f.write(f"Matrix Dimension of H(R): {dim_matrix}\n")
+                        f.write(f"Matrix number of H(R): {n_cell}\n")
+
+                        for i_cell in range(n_cell):
+                            cell_shift = unique_cell_shift[i_cell].tolist()
+                            mr = (h_ref[i_cell] / Rydberg).to_sparse_csr()
+                            row_ptr = mr.crow_indices()
+                            col_ind = mr.col_indices()
+                            values = mr.values()
+                            nnz = len(values)
+
+                            f.write(f"{cell_shift[0]} {cell_shift[1]} {cell_shift[2]} {nnz}\n")
+                            if nnz != 0:
+                                f.write(" ".join(f"{x.item():.8e}" for x in values) + "\n")
+                                f.write(" ".join(str(x.item()) for x in col_ind) + "\n")
+                                f.write(" ".join(str(x.item()) for x in row_ptr) + "\n")
+
+                if "olp" in self.para.write:
+                    olp = rotate2abacus(data.SR, AtomType)
+                    olp, dim_matrix = block_r(olp, data)
+                    with open(f"{prefix}olp.csr", "w") as f:
+                        f.write("STEP: 0\n")
+                        f.write(f"Matrix Dimension of S(R): {dim_matrix}\n")
+                        f.write(f"Matrix number of S(R): {n_cell}\n")
+
+                        for i_cell in range(n_cell):
+                            cell_shift = unique_cell_shift[i_cell].tolist()
+                            mr = olp[i_cell].to_sparse_csr()
+                            row_ptr = mr.crow_indices()
+                            col_ind = mr.col_indices()
+                            values = mr.values()
+                            nnz = len(values)
+
+                            f.write(f"{cell_shift[0]} {cell_shift[1]} {cell_shift[2]} {nnz}\n")
+                            if nnz != 0:
+                                f.write(" ".join(f"{x.item():.8e}" for x in values) + "\n")
+                                f.write(" ".join(str(x.item()) for x in col_ind) + "\n")
+                                f.write(" ".join(str(x.item()) for x in row_ptr) + "\n")
+
+                if "rR" in self.para.write:
+                    rR_x = rotate2abacus(data.rR["x"], AtomType)
+                    rR_y = rotate2abacus(data.rR["y"], AtomType)
+                    rR_z = rotate2abacus(data.rR["z"], AtomType)
+                    rR_x, dim_matrix = block_r(rR_x, data)
+                    rR_y, dim_matrix = block_r(rR_y, data)
+                    rR_z, dim_matrix = block_r(rR_z, data)
+
+                    with open(f"{prefix}rR.csr", "w") as f:
+                        f.write("STEP: 0\n")
+                        f.write(f"Matrix Dimension of r(R): {dim_matrix}\n")
+                        f.write(f"Matrix number of r(R): {n_cell}\n")
+
+                        for i_cell in range(n_cell):
+                            cell_shift = unique_cell_shift[i_cell].tolist()
+                            mr_x = (rR_x[i_cell] / Bohr).to_sparse_csr()
+                            mr_y = (rR_y[i_cell] / Bohr).to_sparse_csr()
+                            mr_z = (rR_z[i_cell] / Bohr).to_sparse_csr()
+
+                            row_ptr_x = mr_x.crow_indices()
+                            col_ind_x = mr_x.col_indices()
+                            values_x = mr_x.values()
+                            nnz_x = len(values_x)
+
+                            row_ptr_y = mr_y.crow_indices()
+                            col_ind_y = mr_y.col_indices()
+                            values_y = mr_y.values()
+                            nnz_y = len(values_y)
+
+                            row_ptr_z = mr_z.crow_indices()
+                            col_ind_z = mr_z.col_indices()
+                            values_z = mr_z.values()
+                            nnz_z = len(values_z)
+
+                            f.write(f"{cell_shift[0]} {cell_shift[1]} {cell_shift[2]}\n")
+
+                            f.write(f"{nnz_x}\n")
+                            if nnz_x != 0:
+                                f.write(" ".join(f"{x.item():.8e}" for x in values_x) + "\n")
+                                f.write(" ".join(str(x.item()) for x in col_ind_x) + "\n")
+                                f.write(" ".join(str(x.item()) for x in row_ptr_x) + "\n")
+
+                            f.write(f"{nnz_y}\n")
+                            if nnz_y != 0:
+                                f.write(" ".join(f"{x.item():.8e}" for x in values_y) + "\n")
+                                f.write(" ".join(str(x.item()) for x in col_ind_y) + "\n")
+                                f.write(" ".join(str(x.item()) for x in row_ptr_y) + "\n")
+
+                            f.write(f"{nnz_z}\n")
+                            if nnz_z != 0:
+                                f.write(" ".join(f"{x.item():.8e}" for x in values_z) + "\n")
+                                f.write(" ".join(str(x.item()) for x in col_ind_z) + "\n")
+                                f.write(" ".join(str(x.item()) for x in row_ptr_z) + "\n")
+
+                if "h_pred" in self.para.write:
+                    data.to(self.device)
+                    h_pred, _ = self.model(data)
+                    h_pred = tensor2tensor(h_pred, "cpu")
+                    data.to("cpu")
+                    h_pred = rotate2abacus(h_pred, AtomType)
+                    h_pred, dim_matrix = block_r(h_pred, data)
+
+                    with open(f"{prefix}h_pred.csr", "w") as f:
+                        f.write("STEP: 0\n")
+                        f.write(f"Matrix Dimension of H(R): {dim_matrix}\n")
+                        f.write(f"Matrix number of H(R): {n_cell}\n")
+
+                        for i_cell in range(n_cell):
+                            cell_shift = unique_cell_shift[i_cell].tolist()
+                            mr = (h_pred[i_cell] / Rydberg).to_sparse_csr()
+                            row_ptr = mr.crow_indices()
+                            col_ind = mr.col_indices()
+                            values = mr.values()
+                            nnz = len(values)
+
+                            f.write(f"{cell_shift[0]} {cell_shift[1]} {cell_shift[2]} {nnz}\n")
+                            if nnz != 0:
+                                f.write(" ".join(f"{x.item():.8e}" for x in values) + "\n")
+                                f.write(" ".join(str(x.item()) for x in col_ind) + "\n")
+                                f.write(" ".join(str(x.item()) for x in row_ptr) + "\n")
 
     def save_checkpoint(self, epoch: int):
         checkpoint_dir = os.path.join(self.para.model_save_path, "checkpoint")
