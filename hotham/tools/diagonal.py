@@ -34,7 +34,9 @@ class Electron():
         
         self.matrix_HR_pred = {}
         self.matrix_SR = {}
-        if self.para["H_ref_csr"] is not None:
+        self.href_csr = self.para.get("H_ref_csr")
+        self.has_H_ref = self.href_csr is not None
+        if self.has_H_ref:
             self.matrix_HR_ref = {}
 
         time_start = time.time()
@@ -82,8 +84,8 @@ class Electron():
 
     def read_csr_HR_and_SR(self):
         files = [("HR_pred", self.para["H_pred_csr"]), ("SR", self.para["S_csr"])]
-        if self.para["H_ref_csr"] is not None:
-            files.append(("HR_ref", self.para["H_ref_csr"]))
+        if self.has_H_ref:
+            files.append(("HR_ref", self.href_csr))
         for target, filepath in files:
             with open(filepath, "r") as f:
                 next(f)
@@ -192,7 +194,7 @@ class Electron():
             eigvals_band_pred[ik] = torch.linalg.eigvalsh(H_prime).cpu().numpy()
         eigvals_band_pred -= efermi_pred
 
-        if self.para["H_ref_csr"] is not None:
+        if self.has_H_ref:
             eigvals_dos_ref = np.empty((len(self.kpoints_dos), self.matrix_HR_ref["dim"]), dtype=self.numpy_float_dtype)
             for ik, k in enumerate(tqdm(self.kpoints_dos, desc="Diagonalizing H(k)_ref for dos and fermi")):
                 Hk, Sk= self.get_Hk_and_Sk(k, target="ref")
@@ -217,18 +219,18 @@ class Electron():
         #plot dos and band
         efermi_fmt = ".6f" if self.numpy_float_dtype == np.float32 else ".12f"
         print(f"Fermi energy (pred): {efermi_pred:{efermi_fmt}} eV")
-        if self.para["H_ref_csr"] is not None:
+        if self.has_H_ref:
             print(f"Fermi energy (ref): {efermi_ref:{efermi_fmt}} eV")
             
         save_dos = {"dos_energy_range": dos_energy_range,"dos": dos_pred,"efermi": efermi_pred,}
-        if self.para["H_ref_csr"] is not None:
+        if self.has_H_ref:
             save_dos["dos_ref"] = dos_ref
             save_dos["efermi_ref"] = efermi_ref
         np.save("dos.npy", save_dos)
 
         plt.figure()
         plt.plot(dos_energy_range, dos_pred, c="b", label="pred DOS")
-        if self.para["H_ref_csr"] is not None:
+        if self.has_H_ref:
             plt.plot(dos_energy_range, dos_ref, c="r", linestyle="--", label="ref DOS")
         plt.axvline(0, color="grey", linestyle="--")
         plt.legend()
@@ -239,14 +241,14 @@ class Electron():
         plt.close()
 
         save_band = {"eigenvalues": eigvals_band_pred,"k_distance": self.k_distance_band,"path": self.para["band_kpoints_path"],"special_k": self.special_k_band,}
-        if self.para["H_ref_csr"] is not None:
+        if self.has_H_ref:
             save_band["eigenvalues_ref"] = eigvals_band_ref
         np.save("eigen.npy", save_band)
 
         plt.figure()
         band_labels = [r"$\Gamma$" if point == "G" else point for point in self.para["band_kpoints_path"]]
         plt.plot(self.k_distance_band, eigvals_band_pred, c="b", label="hotham")
-        if self.para["H_ref_csr"] is not None:
+        if self.has_H_ref:
             plt.plot(self.k_distance_band, eigvals_band_ref, c="r", linestyle="--", label="openmx")
         plt.xlim(self.k_distance_band.min(), self.k_distance_band.max())
         plt.axhline(y=0, color="grey", linestyle="--")
@@ -270,7 +272,7 @@ class Electron():
             Sk = sp.triu(sp.csc_matrix(Sk), format="csc")
             np.savez_compressed(os.path.join(k_outdir, f"k{ik}_H.npz"), data=Hk_pred.data, indices=Hk_pred.indices, indptr=Hk_pred.indptr, shape=Hk_pred.shape)
             np.savez_compressed(os.path.join(k_outdir, f"k{ik}_S.npz"), data=Sk.data, indices=Sk.indices, indptr=Sk.indptr, shape=Sk.shape)
-            if self.para["H_ref_csr"] is not None:
+            if self.has_H_ref:
                 Hk_ref, _ = self.get_Hk_and_Sk(k, target="ref")
                 Hk_ref = sp.triu(sp.csc_matrix(Hk_ref), format="csc")
                 np.savez_compressed(os.path.join(k_outdir, f"k{ik}_Href.npz"), data=Hk_ref.data, indices=Hk_ref.indices, indptr=Hk_ref.indptr, shape=Hk_ref.shape)
@@ -293,7 +295,7 @@ class Electron():
             Sk = sp.triu(sp.csc_matrix(Sk), format="csc")
             np.savez_compressed(os.path.join(k_outdir, f"k{ik}_H.npz"), data=Hk_pred.data, indices=Hk_pred.indices, indptr=Hk_pred.indptr, shape=Hk_pred.shape)
             np.savez_compressed(os.path.join(k_outdir, f"k{ik}_S.npz"), data=Sk.data, indices=Sk.indices, indptr=Sk.indptr, shape=Sk.shape)
-            if self.para["H_ref_csr"] is not None:
+            if self.has_H_ref:
                 Hk_ref, _ = self.get_Hk_and_Sk(k, target="ref")
                 Hk_ref = sp.triu(sp.csc_matrix(Hk_ref), format="csc")
                 np.savez_compressed(os.path.join(k_outdir, f"k{ik}_Href.npz"), data=Hk_ref.data, indices=Hk_ref.indices, indptr=Hk_ref.indptr, shape=Hk_ref.shape)
@@ -307,7 +309,7 @@ if __name__ == "__main__":
         "H_pred_csr": "./h_pred.csr",
         "H_ref_csr": "./h_ref.csr",
         "S_csr": "./olp.csr",
-        # if H_ref is None, will skip calculations for H_ref
+        # if H_ref_csr is omitted, will skip calculations for H_ref
 
         # para band
         "band_kpoints_num":90,
