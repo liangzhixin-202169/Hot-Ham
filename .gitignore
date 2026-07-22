@@ -5,7 +5,5 @@
 **/hotham-models
 **/hotham.egg-info
 **/__pycache__
-*err
 *job-make
-*out
 openmx2hotham

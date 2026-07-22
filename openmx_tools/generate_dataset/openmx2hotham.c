@@ -19,7 +19,7 @@ int main(int argc, char *argv[])
   bool ham_flag = false;
   bool olp_flag = false;
   bool rr_flag = false;
-  for (int i = 2; i < argc; i++)
+  for (i = 2; i < argc; i++)
   {
     if (strcmp(argv[i], "ham") == 0)
     {
@@ -64,7 +64,7 @@ int main(int argc, char *argv[])
           {
             for (j = 0; j < TNO2; j++)
             {
-              printf("%14.10f ", Hks[spin][ct_AN][h_AN][i][j]);
+              printf("%15.8e ", Hks[spin][ct_AN][h_AN][i][j]);
             }
             printf("\n");
           }
@@ -94,7 +94,7 @@ int main(int argc, char *argv[])
             {
               for (j = 0; j < TNO2; j++)
               {
-                printf("%14.10f ", iHks[spin][ct_AN][h_AN][i][j]);
+                printf("%15.8e ", iHks[spin][ct_AN][h_AN][i][j]);
               }
               printf("\n");
             }
@@ -123,7 +123,7 @@ int main(int argc, char *argv[])
         {
           for (j = 0; j < TNO2; j++)
           {
-            printf("%14.10f ", OLP[ct_AN][h_AN][i][j]);
+            printf("%15.8e ", OLP[ct_AN][h_AN][i][j]);
           }
           printf("\n");
         }
@@ -147,7 +147,7 @@ int main(int argc, char *argv[])
         {
           for (j = 0; j < TNO2; j++)
           {
-            printf("%10.7f ", OLPpo[0][0][ct_AN][h_AN][i][j]);
+            printf("%15.8e ", OLPpo[0][0][ct_AN][h_AN][i][j]);
           }
           printf("\n");
         }
@@ -168,7 +168,7 @@ int main(int argc, char *argv[])
         {
           for (j = 0; j < TNO2; j++)
           {
-            printf("%10.7f ", OLPpo[1][0][ct_AN][h_AN][i][j]);
+            printf("%15.8e ", OLPpo[1][0][ct_AN][h_AN][i][j]);
           }
           printf("\n");
         }
@@ -189,7 +189,7 @@ int main(int argc, char *argv[])
         {
           for (j = 0; j < TNO2; j++)
           {
-            printf("%10.7f ", OLPpo[2][0][ct_AN][h_AN][i][j]);
+            printf("%15.8e ", OLPpo[2][0][ct_AN][h_AN][i][j]);
           }
           printf("\n");
         }

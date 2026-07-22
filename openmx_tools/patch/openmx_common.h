@@ -2874,8 +2874,9 @@ double U[30],J[30],Slater_F0[30],Slater_F2[30],Slater_F4[30],Slater_F6[30];
 int B_spe[30],B_l[30],B_mul[30];
 double B_cut[30],lambda[30];
 
-/* overlap only */
-int overlap_only;
+/* patch for hotham */
+int calculate_olp;
+int calculate_rr;
 /*******************/
 
 double Mixing_DM(int MD_iter,

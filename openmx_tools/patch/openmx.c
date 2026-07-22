@@ -633,11 +633,21 @@ int main(int argc, char *argv[])
       SCF-DFT calculations, MD and geometrical
       optimization.
   ****************************************************/
+  
+  /* patch for hotham */
+  int patch_i;
 
-  if(strcmp(argv[argc-1], "-overlaponly")==0)
-    overlap_only = 1;
-  else
-    overlap_only = 0;
+  calculate_olp = 0;
+  calculate_rr = 0;
+
+  for (patch_i = 1; patch_i < argc; patch_i++){
+      if (strcmp(argv[patch_i], "-olp") == 0){
+          calculate_olp = 1;
+      }
+      else if (strcmp(argv[patch_i], "-rr") == 0){
+          calculate_rr = 1;
+      }
+  }
 
   MD_iter = 1;
 

@@ -227,58 +227,25 @@ double DFT(int MD_iter, int Cnt_Now)
   }
 
   time1 = Set_OLP_Kin(OLP,H0);
-  if(overlap_only==1){
+  
+  /* patch for hotham */
+  if (calculate_olp==1 || calculate_rr==1){
     int ID,ct_AN,TNO1,h_AN,Gh_AN,Rn,TNO2,dir;
-    char *pos_label[3] = {"x", "y", "z"};
-    double ****pos_mat[3];
     FILE *fp;
 
-    time10 += Set_Orbitals_Grid(0);
-    Calc_OLP_r(1,myid0);
-    pos_mat[0] = OLPpox;
-    pos_mat[1] = OLPpoy;
-    pos_mat[2] = OLPpoz;
-
-    if(myid0==Host_ID){
+    if (myid0==Host_ID){
       fp = fopen("overlap.txt","w");
-      fprintf(fp,"Overlap matrix\n");
       fclose(fp);
     }
     MPI_Barrier(mpi_comm_level1);
 
-    for(ct_AN=1; ct_AN<=atomnum; ct_AN++){
-      ID = G2ID[ct_AN];
-      if(myid0==ID){
-        fp = fopen("overlap.txt","a");
-        TNO1 = Spe_Total_NO[WhatSpecies[ct_AN]];
-        for (h_AN=0; h_AN<=FNAN[ct_AN]; h_AN++){
-          Gh_AN = natn[ct_AN][h_AN];
-          Rn = ncn[ct_AN][h_AN];
-          TNO2 = Spe_Total_NO[WhatSpecies[Gh_AN]];
-          //printf("Block: %i %i %i %i %i %i %i\n",ct_AN,Gh_AN,atv_ijk[Rn][1],atv_ijk[Rn][2],atv_ijk[Rn][3],TNO1,TNO2);
-          fprintf(fp,"Block: %i %i %i %i %i %i %i\n",ct_AN,Gh_AN,atv_ijk[Rn][1],atv_ijk[Rn][2],atv_ijk[Rn][3],TNO1,TNO2);
-          for (i=0; i<TNO1; i++){
-            for (j=0; j<TNO2; j++){
-              //printf("%10.7f ",OLP[0][F_G2M[ct_AN]][h_AN][i][j]);
-              fprintf(fp,"%10.10f ",OLP[0][F_G2M[ct_AN]][h_AN][i][j]);
-            }
-            //printf("\n");
-            fprintf(fp,"\n");
-          }
-        }
-        fclose(fp);
-      }
-      MPI_Barrier(mpi_comm_level1);
-    }
-
-    for (dir=0; dir<3; dir++){
+    if (calculate_olp==1){
       if(myid0==Host_ID){
         fp = fopen("overlap.txt","a");
-        fprintf(fp,"\n\nOverlap %s matrix \n",pos_label[dir]);
+        fprintf(fp,"Overlap matrix\n");
         fclose(fp);
       }
       MPI_Barrier(mpi_comm_level1);
-
       for(ct_AN=1; ct_AN<=atomnum; ct_AN++){
         ID = G2ID[ct_AN];
         if(myid0==ID){
@@ -288,11 +255,14 @@ double DFT(int MD_iter, int Cnt_Now)
             Gh_AN = natn[ct_AN][h_AN];
             Rn = ncn[ct_AN][h_AN];
             TNO2 = Spe_Total_NO[WhatSpecies[Gh_AN]];
+            //printf("Block: %i %i %i %i %i %i %i\n",ct_AN,Gh_AN,atv_ijk[Rn][1],atv_ijk[Rn][2],atv_ijk[Rn][3],TNO1,TNO2);
             fprintf(fp,"Block: %i %i %i %i %i %i %i\n",ct_AN,Gh_AN,atv_ijk[Rn][1],atv_ijk[Rn][2],atv_ijk[Rn][3],TNO1,TNO2);
             for (i=0; i<TNO1; i++){
               for (j=0; j<TNO2; j++){
-                fprintf(fp,"%10.7f ",pos_mat[dir][F_G2M[ct_AN]][h_AN][i][j]);
+                //printf("%10.7f ",OLP[0][F_G2M[ct_AN]][h_AN][i][j]);
+                fprintf(fp,"%15.8e ",OLP[0][F_G2M[ct_AN]][h_AN][i][j]);
               }
+              //printf("\n");
               fprintf(fp,"\n");
             }
           }
@@ -302,8 +272,49 @@ double DFT(int MD_iter, int Cnt_Now)
       }
     }
 
+    if (calculate_rr==1){
+      char *pos_label[3] = {"x", "y", "z"};
+      double ****pos_mat[3];
+      
+      time10 += Set_Orbitals_Grid(0);
+      Calc_OLP_r(1,myid0);
+      pos_mat[0] = OLPpox;
+      pos_mat[1] = OLPpoy;
+      pos_mat[2] = OLPpoz;
+      for (dir=0; dir<3; dir++){
+        if(myid0==Host_ID){
+          fp = fopen("overlap.txt","a");
+          fprintf(fp,"\n\nOverlap %s matrix \n",pos_label[dir]);
+          fclose(fp);
+        }
+        MPI_Barrier(mpi_comm_level1);
+
+        for(ct_AN=1; ct_AN<=atomnum; ct_AN++){
+          ID = G2ID[ct_AN];
+          if(myid0==ID){
+            fp = fopen("overlap.txt","a");
+            TNO1 = Spe_Total_NO[WhatSpecies[ct_AN]];
+            for (h_AN=0; h_AN<=FNAN[ct_AN]; h_AN++){
+              Gh_AN = natn[ct_AN][h_AN];
+              Rn = ncn[ct_AN][h_AN];
+              TNO2 = Spe_Total_NO[WhatSpecies[Gh_AN]];
+              fprintf(fp,"Block: %i %i %i %i %i %i %i\n",ct_AN,Gh_AN,atv_ijk[Rn][1],atv_ijk[Rn][2],atv_ijk[Rn][3],TNO1,TNO2);
+              for (i=0; i<TNO1; i++){
+                for (j=0; j<TNO2; j++){
+                  fprintf(fp,"%15.8e ",pos_mat[dir][F_G2M[ct_AN]][h_AN][i][j]);
+                }
+                fprintf(fp,"\n");
+              }
+            }
+            fclose(fp);
+          }
+          MPI_Barrier(mpi_comm_level1);
+        }
+      }
     free_OLP_r();
-  }else{
+    }
+  }
+  else{
 
   if (MYID_MPI_COMM_WORLD==Host_ID && 0<level_stdout){
     printf("<MD=%2d>  Calculation of the nonlocal matrix\n",MD_iter);fflush(stdout);
