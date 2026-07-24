@@ -57,8 +57,8 @@ class Electron():
         special_points = bandpath.special_points
         special_points = np.asarray([special_points[special_point] for special_point in path], dtype=self.numpy_float_dtype)
         # cartesian coordinates
-        kpts_car = kpts @ np.asarray(bandpath.icell, dtype=self.numpy_float_dtype)
-        special_points_car = special_points @ np.asarray(bandpath.icell, dtype=self.numpy_float_dtype)
+        kpts_car = kpts @ np.asarray(bandpath.icell.array, dtype=self.numpy_float_dtype)
+        special_points_car = special_points @ np.asarray(bandpath.icell.array, dtype=self.numpy_float_dtype)
         # distance
         k_distance = np.cumsum(np.linalg.norm((kpts_car[1:] - kpts_car[:-1]), axis=-1), dtype=self.numpy_float_dtype)
         k_distance = np.insert(k_distance, 0, 0).astype(self.numpy_float_dtype, copy=False)
