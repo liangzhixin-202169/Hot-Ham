@@ -1,6 +1,7 @@
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
+import numpy as np
 import os
 import sys
 from ase.units import Rydberg, Bohr
@@ -283,16 +284,18 @@ class Kernel(torch.nn.Module):
                     unique_atomtypes = torch.unique(AtomType)
                     AtomType_to_AtomSymbol = model.AtomType_to_AtomSymbol
                     index_edge = data.edge_index_hop
-                    num_edge = index_edge.shape[1]
                     unique_cell_shift_inner = data.unique_cell_shift
-                    cell_shift_index = data.cell_shift_index
                     n_cell_inner = len(unique_cell_shift_inner)
-                    offset = data.offset
+                    cell_shift_index = data.cell_shift_index.cpu().numpy()
+                    offset = data.offset.cpu().numpy()
+                    edge_src = index_edge[0].cpu().numpy()
+                    edge_dst = index_edge[1].cpu().numpy()
+                    atom_type_np = AtomType.cpu().numpy()
                     AtomType_OrbitalSum = model.AtomType_OrbitalSum
                     dim_matrix = int(sum(AtomType_OrbitalSum[atomtype].item() for atomtype in AtomType))
 
-                    Mr = torch.zeros((n_cell_inner, dim_matrix, dim_matrix), dtype=torch.float32)
-                    EdgeNumber = torch.arange(num_edge, dtype=torch.long)
+                    mr_index = []
+                    mr_value = []
 
                     for atomtype_1 in range(num_atomtype):
                         if atomtype_1 not in unique_atomtypes:
@@ -305,19 +308,49 @@ class Kernel(torch.nn.Module):
                             atomsymbol_2 = AtomType_to_AtomSymbol[atomtype_2]
 
                             mr = block[atomsymbol_1][atomsymbol_2]
-                            mr = mr.squeeze(1)
-                            mask_12 = (AtomType[index_edge[0, :]] == atomtype_1) * (AtomType[index_edge[1, :]] == atomtype_2)
-                            edge_12 = EdgeNumber[mask_12]
+                            mr = mr.squeeze(1).cpu().numpy()
+                            mask_12 = (atom_type_np[edge_src] == atomtype_1) & (atom_type_np[edge_dst] == atomtype_2)
+                            edge_12 = np.nonzero(mask_12)[0]
+                            if len(edge_12) == 0:
+                                continue
+
                             sub_cell_shift_index = cell_shift_index[edge_12]
-                            offset0 = offset[index_edge[0, edge_12]]
-                            offset1 = offset[index_edge[1, edge_12]]
+                            offset0 = offset[edge_src[edge_12]]
+                            offset1 = offset[edge_dst[edge_12]]
                             dim0, dim1 = mr.shape[-2:]
 
-                            for i in range(dim0):
-                                for j in range(dim1):
-                                    Mr[sub_cell_shift_index, offset0 + i, offset1 + j] = mr[:, i, j]
+                            local_row = np.arange(dim0, dtype=np.int64)
+                            local_col = np.arange(dim1, dtype=np.int64)
+                            row_grid, col_grid = np.meshgrid(local_row, local_col, indexing="ij")
+                            row_grid = row_grid.reshape(1, -1)
+                            col_grid = col_grid.reshape(1, -1)
 
-                    return Mr, dim_matrix
+                            cell_idx = np.repeat(sub_cell_shift_index[:, None], dim0 * dim1, axis=1)
+                            row_idx = offset0[:, None] + row_grid
+                            col_idx = offset1[:, None] + col_grid
+                            values = mr.reshape(mr.shape[0], -1)
+
+                            nonzero_mask = values != 0
+                            if not np.any(nonzero_mask):
+                                continue
+
+                            mr_index.append(np.stack([
+                                cell_idx[nonzero_mask],
+                                row_idx[nonzero_mask],
+                                col_idx[nonzero_mask]
+                            ], axis=1))
+                            mr_value.append(values[nonzero_mask])
+
+                    if len(mr_index) == 0:
+                        return {
+                            "index": np.zeros((0, 3), dtype=np.int64),
+                            "value": np.zeros((0,), dtype=np.float32)
+                        }, dim_matrix
+
+                    return {
+                        "index": np.concatenate(mr_index, axis=0),
+                        "value": np.concatenate(mr_value, axis=0)
+                    }, dim_matrix
 
                 prefix = "" if len(self.trainloader) == 1 else f"{batch_idx}_"
 
@@ -331,17 +364,23 @@ class Kernel(torch.nn.Module):
 
                         for i_cell in range(n_cell):
                             cell_shift = unique_cell_shift[i_cell].tolist()
-                            mr = (h_ref[i_cell] / Rydberg).to_sparse_csr()
-                            row_ptr = mr.crow_indices()
-                            col_ind = mr.col_indices()
-                            values = mr.values()
+                            mask = h_ref["index"][:, 0] == i_cell
+                            cell_index = h_ref["index"][mask][:, 1:]
+                            values = h_ref["value"][mask] / Rydberg
                             nnz = len(values)
 
                             f.write(f"{cell_shift[0]} {cell_shift[1]} {cell_shift[2]} {nnz}\n")
                             if nnz != 0:
-                                f.write(" ".join(f"{x.item():.8e}" for x in values) + "\n")
-                                f.write(" ".join(str(x.item()) for x in col_ind) + "\n")
-                                f.write(" ".join(str(x.item()) for x in row_ptr) + "\n")
+                                row_order = np.lexsort((cell_index[:, 1], cell_index[:, 0]))
+                                cell_index = cell_index[row_order]
+                                values = values[row_order]
+                                rows = cell_index[:, 0].astype(np.int64, copy=False)
+                                cols = cell_index[:, 1].astype(np.int64, copy=False)
+                                counts = np.bincount(rows, minlength=dim_matrix)
+                                row_ptr = np.concatenate(([0], np.cumsum(counts, dtype=np.int64)))
+                                f.write(" ".join(f"{x:.8e}" for x in values) + "\n")
+                                f.write(" ".join(str(x) for x in cols) + "\n")
+                                f.write(" ".join(str(x) for x in row_ptr) + "\n")
 
                 if "olp" in self.para.write:
                     olp = rotate2abacus(data.SR, AtomType)
@@ -353,17 +392,23 @@ class Kernel(torch.nn.Module):
 
                         for i_cell in range(n_cell):
                             cell_shift = unique_cell_shift[i_cell].tolist()
-                            mr = olp[i_cell].to_sparse_csr()
-                            row_ptr = mr.crow_indices()
-                            col_ind = mr.col_indices()
-                            values = mr.values()
+                            mask = olp["index"][:, 0] == i_cell
+                            cell_index = olp["index"][mask][:, 1:]
+                            values = olp["value"][mask]
                             nnz = len(values)
 
                             f.write(f"{cell_shift[0]} {cell_shift[1]} {cell_shift[2]} {nnz}\n")
                             if nnz != 0:
-                                f.write(" ".join(f"{x.item():.8e}" for x in values) + "\n")
-                                f.write(" ".join(str(x.item()) for x in col_ind) + "\n")
-                                f.write(" ".join(str(x.item()) for x in row_ptr) + "\n")
+                                row_order = np.lexsort((cell_index[:, 1], cell_index[:, 0]))
+                                cell_index = cell_index[row_order]
+                                values = values[row_order]
+                                rows = cell_index[:, 0].astype(np.int64, copy=False)
+                                cols = cell_index[:, 1].astype(np.int64, copy=False)
+                                counts = np.bincount(rows, minlength=dim_matrix)
+                                row_ptr = np.concatenate(([0], np.cumsum(counts, dtype=np.int64)))
+                                f.write(" ".join(f"{x:.8e}" for x in values) + "\n")
+                                f.write(" ".join(str(x) for x in cols) + "\n")
+                                f.write(" ".join(str(x) for x in row_ptr) + "\n")
 
                 if "rR" in self.para.write:
                     rR_x = rotate2abacus(data.rR["x"], AtomType)
@@ -380,44 +425,62 @@ class Kernel(torch.nn.Module):
 
                         for i_cell in range(n_cell):
                             cell_shift = unique_cell_shift[i_cell].tolist()
-                            mr_x = (rR_x[i_cell] / Bohr).to_sparse_csr()
-                            mr_y = (rR_y[i_cell] / Bohr).to_sparse_csr()
-                            mr_z = (rR_z[i_cell] / Bohr).to_sparse_csr()
+                            mask_x = rR_x["index"][:, 0] == i_cell
+                            mask_y = rR_y["index"][:, 0] == i_cell
+                            mask_z = rR_z["index"][:, 0] == i_cell
 
-                            row_ptr_x = mr_x.crow_indices()
-                            col_ind_x = mr_x.col_indices()
-                            values_x = mr_x.values()
+                            cell_index_x = rR_x["index"][mask_x][:, 1:]
+                            values_x = rR_x["value"][mask_x] / Bohr
                             nnz_x = len(values_x)
 
-                            row_ptr_y = mr_y.crow_indices()
-                            col_ind_y = mr_y.col_indices()
-                            values_y = mr_y.values()
+                            cell_index_y = rR_y["index"][mask_y][:, 1:]
+                            values_y = rR_y["value"][mask_y] / Bohr
                             nnz_y = len(values_y)
 
-                            row_ptr_z = mr_z.crow_indices()
-                            col_ind_z = mr_z.col_indices()
-                            values_z = mr_z.values()
+                            cell_index_z = rR_z["index"][mask_z][:, 1:]
+                            values_z = rR_z["value"][mask_z] / Bohr
                             nnz_z = len(values_z)
 
                             f.write(f"{cell_shift[0]} {cell_shift[1]} {cell_shift[2]}\n")
 
                             f.write(f"{nnz_x}\n")
                             if nnz_x != 0:
-                                f.write(" ".join(f"{x.item():.8e}" for x in values_x) + "\n")
-                                f.write(" ".join(str(x.item()) for x in col_ind_x) + "\n")
-                                f.write(" ".join(str(x.item()) for x in row_ptr_x) + "\n")
+                                row_order_x = np.lexsort((cell_index_x[:, 1], cell_index_x[:, 0]))
+                                cell_index_x = cell_index_x[row_order_x]
+                                values_x = values_x[row_order_x]
+                                rows_x = cell_index_x[:, 0].astype(np.int64, copy=False)
+                                cols_x = cell_index_x[:, 1].astype(np.int64, copy=False)
+                                counts_x = np.bincount(rows_x, minlength=dim_matrix)
+                                row_ptr_x = np.concatenate(([0], np.cumsum(counts_x, dtype=np.int64)))
+                                f.write(" ".join(f"{x:.8e}" for x in values_x) + "\n")
+                                f.write(" ".join(str(x) for x in cols_x) + "\n")
+                                f.write(" ".join(str(x) for x in row_ptr_x) + "\n")
 
                             f.write(f"{nnz_y}\n")
                             if nnz_y != 0:
-                                f.write(" ".join(f"{x.item():.8e}" for x in values_y) + "\n")
-                                f.write(" ".join(str(x.item()) for x in col_ind_y) + "\n")
-                                f.write(" ".join(str(x.item()) for x in row_ptr_y) + "\n")
+                                row_order_y = np.lexsort((cell_index_y[:, 1], cell_index_y[:, 0]))
+                                cell_index_y = cell_index_y[row_order_y]
+                                values_y = values_y[row_order_y]
+                                rows_y = cell_index_y[:, 0].astype(np.int64, copy=False)
+                                cols_y = cell_index_y[:, 1].astype(np.int64, copy=False)
+                                counts_y = np.bincount(rows_y, minlength=dim_matrix)
+                                row_ptr_y = np.concatenate(([0], np.cumsum(counts_y, dtype=np.int64)))
+                                f.write(" ".join(f"{x:.8e}" for x in values_y) + "\n")
+                                f.write(" ".join(str(x) for x in cols_y) + "\n")
+                                f.write(" ".join(str(x) for x in row_ptr_y) + "\n")
 
                             f.write(f"{nnz_z}\n")
                             if nnz_z != 0:
-                                f.write(" ".join(f"{x.item():.8e}" for x in values_z) + "\n")
-                                f.write(" ".join(str(x.item()) for x in col_ind_z) + "\n")
-                                f.write(" ".join(str(x.item()) for x in row_ptr_z) + "\n")
+                                row_order_z = np.lexsort((cell_index_z[:, 1], cell_index_z[:, 0]))
+                                cell_index_z = cell_index_z[row_order_z]
+                                values_z = values_z[row_order_z]
+                                rows_z = cell_index_z[:, 0].astype(np.int64, copy=False)
+                                cols_z = cell_index_z[:, 1].astype(np.int64, copy=False)
+                                counts_z = np.bincount(rows_z, minlength=dim_matrix)
+                                row_ptr_z = np.concatenate(([0], np.cumsum(counts_z, dtype=np.int64)))
+                                f.write(" ".join(f"{x:.8e}" for x in values_z) + "\n")
+                                f.write(" ".join(str(x) for x in cols_z) + "\n")
+                                f.write(" ".join(str(x) for x in row_ptr_z) + "\n")
 
                 if "h_pred" in self.para.write:
                     data.to(self.device)
@@ -434,17 +497,23 @@ class Kernel(torch.nn.Module):
 
                         for i_cell in range(n_cell):
                             cell_shift = unique_cell_shift[i_cell].tolist()
-                            mr = (h_pred[i_cell] / Rydberg).to_sparse_csr()
-                            row_ptr = mr.crow_indices()
-                            col_ind = mr.col_indices()
-                            values = mr.values()
+                            mask = h_pred["index"][:, 0] == i_cell
+                            cell_index = h_pred["index"][mask][:, 1:]
+                            values = h_pred["value"][mask] / Rydberg
                             nnz = len(values)
 
                             f.write(f"{cell_shift[0]} {cell_shift[1]} {cell_shift[2]} {nnz}\n")
                             if nnz != 0:
-                                f.write(" ".join(f"{x.item():.8e}" for x in values) + "\n")
-                                f.write(" ".join(str(x.item()) for x in col_ind) + "\n")
-                                f.write(" ".join(str(x.item()) for x in row_ptr) + "\n")
+                                row_order = np.lexsort((cell_index[:, 1], cell_index[:, 0]))
+                                cell_index = cell_index[row_order]
+                                values = values[row_order]
+                                rows = cell_index[:, 0].astype(np.int64, copy=False)
+                                cols = cell_index[:, 1].astype(np.int64, copy=False)
+                                counts = np.bincount(rows, minlength=dim_matrix)
+                                row_ptr = np.concatenate(([0], np.cumsum(counts, dtype=np.int64)))
+                                f.write(" ".join(f"{x:.8e}" for x in values) + "\n")
+                                f.write(" ".join(str(x) for x in cols) + "\n")
+                                f.write(" ".join(str(x) for x in row_ptr) + "\n")
 
     def save_checkpoint(self, epoch: int):
         checkpoint_dir = os.path.join(self.para.model_save_path, "checkpoint")
