@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import torch
 import spglib
@@ -8,7 +9,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from ase import Atoms
 from ase.io import read
-from typing import Literal
+from typing import Literal, Optional
 from scipy.special import erfc
 from collections import Counter
 
@@ -128,7 +129,7 @@ class Electron():
             target_dict['dim'] = dim
             target_dict['n_cell'] = n_cell
 
-    def get_Hk_and_Sk(self, k: np.ndarray, target: Literal["pred", "ref"]) -> tuple[np.ndarray, np.ndarray]:
+    def get_dense_Hk_and_Sk(self, k: np.ndarray, target: Literal["pred", "ref"]) -> tuple[np.ndarray, np.ndarray]:
         if target == "pred":
             matrix_HR = self.matrix_HR_pred
         elif target == "ref":
@@ -139,6 +140,26 @@ class Electron():
         phase_S = np.exp(1j * 2 * np.pi * (self.matrix_SR['cell_shifts'] @ k)).astype(self.numpy_complex_dtype, copy=False)
         np.add.at(Hk, (matrix_HR['row'], matrix_HR['col']), matrix_HR['value'] * phase_H[matrix_HR['cell_idx']])
         np.add.at(Sk, (self.matrix_SR['row'], self.matrix_SR['col']), self.matrix_SR['value'] * phase_S[self.matrix_SR['cell_idx']])
+        return Hk, Sk
+
+    def get_sparse_Hk_and_Sk(self, k: np.ndarray, target: Literal["pred", "ref"]) -> tuple[sp.csc_matrix, sp.csc_matrix]:
+        if target == "pred":
+            matrix_HR = self.matrix_HR_pred
+        elif target == "ref":
+            matrix_HR = self.matrix_HR_ref
+        phase_H = np.exp(1j * 2 * np.pi * (matrix_HR['cell_shifts'] @ k)).astype(self.numpy_complex_dtype, copy=False)
+        phase_S = np.exp(1j * 2 * np.pi * (self.matrix_SR['cell_shifts'] @ k)).astype(self.numpy_complex_dtype, copy=False)
+        # 只保留上三角的非零元
+        mask_H = matrix_HR['row'] <= matrix_HR['col']
+        mask_S = self.matrix_SR['row'] <= self.matrix_SR['col']
+        Hk = sp.coo_matrix(
+            (matrix_HR['value'][mask_H] * phase_H[matrix_HR['cell_idx'][mask_H]], (matrix_HR['row'][mask_H], matrix_HR['col'][mask_H])),
+            shape=(matrix_HR['dim'], matrix_HR['dim']),
+        ).tocsc()
+        Sk = sp.coo_matrix(
+            (self.matrix_SR['value'][mask_S] * phase_S[self.matrix_SR['cell_idx'][mask_S]], (self.matrix_SR['row'][mask_S], self.matrix_SR['col'][mask_S])),
+            shape=(self.matrix_SR['dim'], self.matrix_SR['dim']),
+        ).tocsc()
         return Hk, Sk
 
     def get_fermi_energy(self, eigvals: np.ndarray, kweight: np.ndarray, valence_electrons: int) -> float:
@@ -173,7 +194,7 @@ class Electron():
         # 先算dos和fermi，再算band
         eigvals_dos_pred = np.empty((len(self.kpoints_dos), self.matrix_HR_pred["dim"]), dtype=self.numpy_float_dtype)
         for ik, k in enumerate(tqdm(self.kpoints_dos, desc="Diagonalizing H(k)_pred for dos and fermi")):
-            Hk, Sk= self.get_Hk_and_Sk(k, target="pred")
+            Hk, Sk= self.get_dense_Hk_and_Sk(k, target="pred")
             Hk, Sk = torch.as_tensor(Hk, device=self.device, dtype=self.torch_complex_dtype), torch.as_tensor(Sk, device=self.device, dtype=self.torch_complex_dtype)
             L = torch.linalg.cholesky(Sk)
             X = torch.linalg.solve_triangular(L, Hk, upper=False)
@@ -186,7 +207,7 @@ class Electron():
 
         eigvals_band_pred = np.empty((len(self.kpoints_band), self.matrix_HR_pred["dim"]), dtype=self.numpy_float_dtype)
         for ik, k in enumerate(tqdm(self.kpoints_band, desc="Diagonalizing H(k)_pred for band")):
-            Hk, Sk= self.get_Hk_and_Sk(k, target="pred")
+            Hk, Sk= self.get_dense_Hk_and_Sk(k, target="pred")
             Hk, Sk = torch.as_tensor(Hk, device=self.device, dtype=self.torch_complex_dtype), torch.as_tensor(Sk, device=self.device, dtype=self.torch_complex_dtype)
             L = torch.linalg.cholesky(Sk)
             X = torch.linalg.solve_triangular(L, Hk, upper=False)
@@ -197,7 +218,7 @@ class Electron():
         if self.has_H_ref:
             eigvals_dos_ref = np.empty((len(self.kpoints_dos), self.matrix_HR_ref["dim"]), dtype=self.numpy_float_dtype)
             for ik, k in enumerate(tqdm(self.kpoints_dos, desc="Diagonalizing H(k)_ref for dos and fermi")):
-                Hk, Sk= self.get_Hk_and_Sk(k, target="ref")
+                Hk, Sk= self.get_dense_Hk_and_Sk(k, target="ref")
                 Hk, Sk = torch.as_tensor(Hk, device=self.device, dtype=self.torch_complex_dtype), torch.as_tensor(Sk, device=self.device, dtype=self.torch_complex_dtype)
                 L = torch.linalg.cholesky(Sk)
                 X = torch.linalg.solve_triangular(L, Hk, upper=False)
@@ -208,7 +229,7 @@ class Electron():
 
             eigvals_band_ref = np.empty((len(self.kpoints_band), self.matrix_HR_ref["dim"]), dtype=self.numpy_float_dtype)
             for ik, k in enumerate(tqdm(self.kpoints_band, desc="Diagonalizing H(k)_ref for band")):
-                Hk, Sk= self.get_Hk_and_Sk(k, target="ref")
+                Hk, Sk= self.get_dense_Hk_and_Sk(k, target="ref")
                 Hk, Sk = torch.as_tensor(Hk, device=self.device, dtype=self.torch_complex_dtype), torch.as_tensor(Sk, device=self.device, dtype=self.torch_complex_dtype)
                 L = torch.linalg.cholesky(Sk)
                 X = torch.linalg.solve_triangular(L, Hk, upper=False)
@@ -260,24 +281,23 @@ class Electron():
         plt.savefig("band.png")
         plt.close()
 
-    def extract_band_matrix(self):
+    def extract_band_matrix(self, ik: Optional[int] = None):
         outdir = "./matrix_band"
         os.makedirs(outdir, exist_ok=True)
-        for ik, k in enumerate(tqdm(self.kpoints_band, desc="Exporting Mk for Band")):
+        ik_list = range(len(self.kpoints_band)) if ik is None else [ik]
+        for ik in tqdm(ik_list, desc="Exporting Mk for Band", disable=len(ik_list) == 1):
+            k = self.kpoints_band[ik]
             k_outdir = os.path.join(outdir, f"k{ik}")
             os.makedirs(k_outdir, exist_ok=True)
 
-            Hk_pred, Sk = self.get_Hk_and_Sk(k, target="pred")
-            Hk_pred = sp.triu(sp.csc_matrix(Hk_pred), format="csc")
-            Sk = sp.triu(sp.csc_matrix(Sk), format="csc")
+            Hk_pred, Sk = self.get_sparse_Hk_and_Sk(k, target="pred")
             np.savez_compressed(os.path.join(k_outdir, f"k{ik}_H.npz"), data=Hk_pred.data, indices=Hk_pred.indices, indptr=Hk_pred.indptr, shape=Hk_pred.shape)
             np.savez_compressed(os.path.join(k_outdir, f"k{ik}_S.npz"), data=Sk.data, indices=Sk.indices, indptr=Sk.indptr, shape=Sk.shape)
             if self.has_H_ref:
-                Hk_ref, _ = self.get_Hk_and_Sk(k, target="ref")
-                Hk_ref = sp.triu(sp.csc_matrix(Hk_ref), format="csc")
+                Hk_ref, _ = self.get_sparse_Hk_and_Sk(k, target="ref")
                 np.savez_compressed(os.path.join(k_outdir, f"k{ik}_Href.npz"), data=Hk_ref.data, indices=Hk_ref.indices, indptr=Hk_ref.indptr, shape=Hk_ref.shape)
 
-    def extract_dos_matrix(self):
+    def extract_dos_matrix(self, ik: Optional[int] = None):
         outdir = "./matrix_dos"
         os.makedirs(outdir, exist_ok=True)
 
@@ -285,19 +305,18 @@ class Electron():
             f.write("# kx ky kz weight\n")
             for kp, w in zip(self.kpoints_dos, self.kpoints_weight_dos):
                 f.write(f"{kp[0]:.8f} {kp[1]:.8f} {kp[2]:.8f} {w:.8f}\n")
-            
-        for ik, k in enumerate(tqdm(self.kpoints_dos, desc="Exporting Mk for DOS")):
+
+        ik_list = range(len(self.kpoints_dos)) if ik is None else [ik]
+        for ik in tqdm(ik_list, desc="Exporting Mk for DOS", disable=len(ik_list) == 1):
+            k = self.kpoints_dos[ik]
             k_outdir = os.path.join(outdir, f"k{ik}")
             os.makedirs(k_outdir, exist_ok=True)
 
-            Hk_pred, Sk = self.get_Hk_and_Sk(k, target="pred")
-            Hk_pred = sp.triu(sp.csc_matrix(Hk_pred), format="csc")
-            Sk = sp.triu(sp.csc_matrix(Sk), format="csc")
+            Hk_pred, Sk = self.get_sparse_Hk_and_Sk(k, target="pred")
             np.savez_compressed(os.path.join(k_outdir, f"k{ik}_H.npz"), data=Hk_pred.data, indices=Hk_pred.indices, indptr=Hk_pred.indptr, shape=Hk_pred.shape)
             np.savez_compressed(os.path.join(k_outdir, f"k{ik}_S.npz"), data=Sk.data, indices=Sk.indices, indptr=Sk.indptr, shape=Sk.shape)
             if self.has_H_ref:
-                Hk_ref, _ = self.get_Hk_and_Sk(k, target="ref")
-                Hk_ref = sp.triu(sp.csc_matrix(Hk_ref), format="csc")
+                Hk_ref, _ = self.get_sparse_Hk_and_Sk(k, target="ref")
                 np.savez_compressed(os.path.join(k_outdir, f"k{ik}_Href.npz"), data=Hk_ref.data, indices=Hk_ref.indices, indptr=Hk_ref.indptr, shape=Hk_ref.shape)
 
 if __name__ == "__main__":
@@ -323,11 +342,21 @@ if __name__ == "__main__":
         "dos_energy_range": [-2, 2, 400],
     }
 
+    args = sys.argv[1:]
+    if args == ["-diag"]:
+        mode, ik = "diag", None
+    elif len(args) == 2 and args[0] in ("-band", "-dos"):
+        mode = args[0][1:]
+        ik = None if args[1] == "all" else int(args[1])
+    else:
+        raise SystemExit("Usage: python diagonal.py -diag | -band ik|all | -dos ik|all")
+
     with torch.no_grad():
         elec = Electron(inputfile)
-        # calculate fermi, dos, band
-        elec.run()
-        # extract upper tri matrix for band/dos
-        #elec.extract_band_matrix()
-        #elec.extract_dos_matrix()
+        if mode == "diag":
+            elec.run()
+        elif mode == "band":
+            elec.extract_band_matrix(ik)
+        else:
+            elec.extract_dos_matrix(ik)
 
