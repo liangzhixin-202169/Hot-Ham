@@ -359,4 +359,3 @@ if __name__ == "__main__":
             elec.extract_band_matrix(ik)
         else:
             elec.extract_dos_matrix(ik)
-

@@ -496,6 +496,9 @@ class AbacusData(DataBase):
         for root, HS_file in tqdm(paths):
             structure = read(os.path.join(root, "../model.xyz"))
 
+            #fix for relaxed xyz to find correct neighbor
+            structure.wrap(eps=1.0e-7)
+
             # atom_type, n_type, lattice, position
             AtomType = torch.tensor([self.AtomNumber_to_AtomType[atomnumber] for atomnumber in structure.numbers])
             n_type = self.n_type
