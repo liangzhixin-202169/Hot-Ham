@@ -160,6 +160,55 @@ class DataBase(ABC):
         edge_inverse = find_inverse_index(i, j, S)
         return [torch.from_numpy(ele).to(self.device) for ele in [i, j, d, D, S, edge_index, edge_inverse]]
 
+    def find_abacus_neighbor(self, frame: ase.Atoms, cutoff):
+        i, j, d, D, S = neighbor_list("ijdDS", a=frame, cutoff=cutoff, self_interaction=self.para.edge_include_sc)
+        phi_cutoff = self.para["orbital_cutoff"]
+        projector_cutoff = self.para["nonlocal_cutoff"]
+        symbols = frame.get_chemical_symbols()
+        phi_rcut = np.array([phi_cutoff[symbol] for symbol in symbols], dtype=float)
+        beta_rcut = np.array([projector_cutoff[symbol] for symbol in symbols], dtype=float)
+        # Build all Phi-beta connections once.  The enlarged cutoff only
+        # generates candidates; the exact ABACUS condition is checked below.
+        beta_candidate_cutoff = phi_rcut + np.max(beta_rcut)
+        bi, bj, bd, bD, bS = neighbor_list("ijdDS", a=frame, cutoff=beta_candidate_cutoff, self_interaction=True)
+        beta_neighbors = {}
+        zero_shift = (0, 0, 0)
+        for index in range(len(bi)):
+            target = int(bi[index])
+            center = int(bj[index])
+            shift = tuple(np.asarray(bS[index], dtype=int))
+            distance = bd[index] / Bohr
+            if distance < phi_rcut[target] + beta_rcut[center]:
+                beta_neighbors.setdefault((target, zero_shift), set()).add((center, shift))
+
+        keep = []
+        shifted_cache = {}
+        for index in range(len(i)):
+            atom_i = int(i[index])
+            atom_j = int(j[index])
+            shift_ij = np.asarray(S[index], dtype=int)
+            is_adjacent = d[index] / Bohr < phi_rcut[atom_i] + phi_rcut[atom_j]
+            if not is_adjacent:
+                neighbors_i = beta_neighbors.get((atom_i, zero_shift), set())
+                shift_tuple = tuple(shift_ij)
+                cache_key = (atom_j, shift_tuple)
+                if cache_key not in shifted_cache:
+                    neighbors_j = beta_neighbors.get((atom_j, zero_shift), set())
+                    shifted_cache[cache_key] = {(center, tuple(np.asarray(center_shift) + shift_ij)) for center, center_shift in neighbors_j}
+                neighbors_j_shifted = shifted_cache[cache_key]
+                is_adjacent = bool(neighbors_i & neighbors_j_shifted)
+            if is_adjacent:
+                keep.append(index)
+        keep = np.asarray(keep, dtype=np.int64)
+        i = i[keep]
+        j = j[keep]
+        d = d[keep]
+        D = D[keep]
+        S = S[keep]
+        edge_index = np.concatenate([i.reshape(1, -1), j.reshape(1, -1)], axis=0)
+        edge_inverse = find_inverse_index(i, j, S)
+        return [torch.from_numpy(ele).to(self.device) for ele in [i, j, d, D, S, edge_index, edge_inverse]]
+
     def get_wigner_Ds(self, lmax, edge_vec):
         # edge_vec should be yzx order
         # R@((0,1,0).T) = (y,z,x).T
@@ -520,8 +569,9 @@ class AbacusData(DataBase):
             #   Hamiltonian  (n_type, n_type, edge, spin, orbit_0, oribit_1)
             #   iHamiltonian (n_type, n_type, edge, spin, orbit_0, oribit_1)
             #   overlap      (n_type, n_type, edge,       orbit_0, oribit_1)
-            cutoff = [self.para["cutoff"][symbol]*Bohr for symbol in structure.get_chemical_symbols()]
-            _, _, d, D, S, edge_index, edge_inverse = self.find_neigbhor(frame=structure, cutoff=cutoff)
+            #cutoff = [self.para["cutoff"][symbol]*Bohr for symbol in structure.get_chemical_symbols()]
+            cutoff = [(self.para["orbital_cutoff"][symbol] + self.para["nonlocal_cutoff"][symbol]) * Bohr for symbol in structure.get_chemical_symbols()]
+            _, _, d, D, S, edge_index, edge_inverse = self.find_abacus_neighbor(frame=structure, cutoff=cutoff)
             unique_cell_shift, cell_shift_index = find_cell_shfit_index(S)
             HR, iHR, SR, rR = self.abacus2hotham(HR=HR,
                                                  iHR=iHR,
@@ -861,71 +911,69 @@ class OpenmxData(DataBase):
         return dataset
 
 
-class GraphData(DataBase):
-    def __init__(self, para: Union[dict, Parameters], dataset):
-        super().__init__(para, dataset)
-        self.device = para.device
-        self.dataset = self.get_graph()
+# class GraphData(DataBase):
+#     def __init__(self, para: Union[dict, Parameters], dataset):
+#         super().__init__(para, dataset)
+#         self.device = para.device
+#         self.dataset = self.get_graph()
 
-        if self.para.using_CoordinateTransformation:
-            for data in self.dataset:
-                data.wigner_D = self.get_wigner_Ds(self.para.L_max, data.D_hop[:, [1, 2, 0]])
-                if self.para.edge_include_sc:
-                    data.mask_edge = (data.d_hop > 1.0e-6)
-                    data.mask_sc = ~data.mask_edge
-                    for index in range(len(data.wigner_D)):
-                        data.wigner_D[index][data.mask_sc] = torch.eye(2*index+1, dtype=data.wigner_D[index].dtype, device=data.wigner_D[index].device).unsqueeze(0)
+#         if self.para.using_CoordinateTransformation:
+#             for data in self.dataset:
+#                 data.wigner_D = self.get_wigner_Ds(self.para.L_max, data.D_hop[:, [1, 2, 0]])
+#                 if self.para.edge_include_sc:
+#                     data.mask_edge = (data.d_hop > 1.0e-6)
+#                     data.mask_sc = ~data.mask_edge
+#                     for index in range(len(data.wigner_D)):
+#                         data.wigner_D[index][data.mask_sc] = torch.eye(2*index+1, dtype=data.wigner_D[index].dtype, device=data.wigner_D[index].device).unsqueeze(0)
 
-    def get_graph(self):
-        dataset = []
+#     def get_graph(self):
+#         dataset = []
 
-        for root, _, files in os.walk(self.dataset):
-            if "model.xyz" in files:
-                structure_file = os.path.join(root, "model.xyz")
-                frame = read(structure_file)
+#         for root, _, files in os.walk(self.dataset):
+#             if "model.xyz" in files:
+#                 structure_file = os.path.join(root, "model.xyz")
+#                 frame = read(structure_file)
 
-                AtomType = torch.tensor([self.AtomNumber_to_AtomType[atomnumber] for atomnumber in frame.numbers])
-                lattice = torch.from_numpy(np.array(frame.cell))
-                pos = torch.from_numpy(frame.positions)
+#                 AtomType = torch.tensor([self.AtomNumber_to_AtomType[atomnumber] for atomnumber in frame.numbers])
+#                 lattice = torch.from_numpy(np.array(frame.cell))
+#                 pos = torch.from_numpy(frame.positions)
 
-                cutoff = [self.para.cutoff[symbol]*Bohr for symbol in frame.get_chemical_symbols()]
-                _, _, d, D, S, edge_index, edge_inverse = self.find_neigbhor(frame=frame, cutoff=cutoff)
+#                 cutoff = [self.para.cutoff[symbol]*Bohr for symbol in frame.get_chemical_symbols()]
+#                 _, _, d, D, S, edge_index, edge_inverse = self.find_neigbhor(frame=frame, cutoff=cutoff)
 
-                data = Data(
-                    AtomType=AtomType,
-                    lattice=lattice,
-                    pos=pos.to(self.floatdtype),
-                    edge_index_hop=edge_index.to(self.intdtype),
-                    d_hop=d.to(self.floatdtype),
-                    D_hop=D.to(self.floatdtype),
-                    S_hop=S.to(self.intdtype),
-                    edge_inverse=edge_inverse.to(self.intdtype)
-                )
+#                 data = Data(
+#                     AtomType=AtomType,
+#                     lattice=lattice,
+#                     pos=pos.to(self.floatdtype),
+#                     edge_index_hop=edge_index.to(self.intdtype),
+#                     d_hop=d.to(self.floatdtype),
+#                     D_hop=D.to(self.floatdtype),
+#                     S_hop=S.to(self.intdtype),
+#                     edge_inverse=edge_inverse.to(self.intdtype)
+#                 )
 
-                dataset.append(data)
-        return dataset
+#                 dataset.append(data)
+#         return dataset
 
 
 if __name__ == "__main__":
     inputfile = {
-        "trainset": ".",
+        "trainset": "./",
         # "testset": "./data/testset",
         # "valset": "./data/valset",
         "dft": "abacus",
         "orbit": {
-            "H": ["1s", "2s", "2p"],
             "C": ["1s", "2s", "2p", "3p", "3d"],
-            "N": ["1s", "2s", "2p", "3p", "3d"],
-            "O": ["1s", "2s", "2p", "3p", "3d"],
+
         },
-        "L_max": 5,
+        "L_max": 7,
         # only used by AbacusData
-        "cutoff": {
-            "H": 8,
-            "C": 8,
-            "N": 8,
-            "O": 8,
-        }
+        "orbital_cutoff": {
+            "C": 7,
+        },
+        "nonlocal_cutoff": {
+            "C": 1.45,
+        },
     }
 
     param = Parameters(inputfile)
@@ -933,8 +981,8 @@ if __name__ == "__main__":
         DATACLASS = AbacusData
     elif param.dft == "openmx":
         DATACLASS = OpenmxData
-    elif param.dft is None:
-        DATACLASS = GraphData
+    # elif param.dft is None:
+    #     DATACLASS = GraphData
 
     for dataset in ["trainset", "valset", "testset"]:
         if param[dataset] is not None:
