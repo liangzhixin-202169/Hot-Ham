@@ -1,44 +1,47 @@
 # Hot-Ham: High-order Tensor machine-learning Hamiltonian
 ## 1.Introduction
-**Hot-Ham** is developed by Prof. Jian Sun's group (https://sun.nju.edu.cn) at Nanjing Universityis. It a Python package designed for constructing E(3)-equivariant machine learning models to predict Density Functional Theory (DFT) Hamiltonians. The framework is based on message passing neural networks(MPNNs), using spherical tensors to represent E(3)-equivariant node and edge features. **Hot-Ham** utilizes local coordinate transformation and Gaunt tensor product to achieve efficient high-order spherical tensor products, which is critical to improve models' accuracy.
+**Hot-Ham** is an open-source Python package developed by Prof. Jian Sun's group (https://sun.nju.edu.cn) at Nanjing University. It uses E(3)-equivariant message-passing neural networks to construct electronic Hamiltonians in both LCAO and orthogonal tight-binding representations. 
+
+The models combine atom and distance embeddings with spherical harmonics to build and update equivariant node and edge features. For efficient high-order feature coupling, the LCAO model combines Gaunt tensor products with SO(2) convolution, while the orthogonal tight-binding model combines Fourier convolution with SO(2) convolution. 
 
 ## 2.Current Features
-- Building density functional theory Hamiltonian in the LCAO basis.
-- Leveraging efficient Gaunt tensor products (with or without local coordinate transformation) to couple the node and edge equivariant features.
-- Compensating for the lack of antisymmetric tensors in Gaunt tensor products via Clebsch-Gordan tensor product under local coordinate transformation(SO(2) convolution).
+- Model training for LCAO Hamiltonian prediction using reference DFT Hamiltonian data.
+- Model training for orthogonal tight-binding Hamiltonian prediction using reference band structures.
+- Efficient coupling of high-order equivariant features through Gaunt tensor products or Fourier convolution, combined with SO(2) convolution.
+- Support for electronic property calculations from the predicted LCAO Hamiltonians, including band structures, density of states, and optical conductivity.
 
 ## 3.Requirements
 ### Python
-The python version is recommended to be larger than 3.10, with following packages:
-- numpy
-- torch
-- torch_geometric
-- e3nn
+The python version is recommended to be newer than 3.10, with following packages:
 - ase
+- e3nn
 - h5py
-- json5
 - tqdm
+- json5
+- numpy
 - pyyaml
+- matplotlib
+- torch
+- torch-scatter
+- torch-geometric
 
-### **Hot-Ham** installation
+## 4.Installation
 You can use pip:
 ```shell
 pip install git+https://github.com/liangzhixin-202169/Hot-Ham.git
 ```
 
-### Interface
-Hot-Ham supports ABACUS and OpenMX.
+After that, install `torch-scatter` according to your PyTorch and CUDA versions manually.
 
-#### ABACUS
-#### OpenMX
-`openmx_tools/patch` offers patch that directly outputs overlap matrix, and you need to place it in OpenMX's `source` directory when compiling.`openmx_tools/generate_dataset` provides script to extract Hamiltonian and overlap matrixes.
+If you plan to use the additional analysis tools, we also recommend installing `scipy` and `spglib`:
 
-## 4.Usage
-### Train
-Hot-Ham can be trained with:
-```shell
-hotham train.json
-```
 
-## 5.Reference
-[1] 1. Zhixin Liang, Yunlong Wang, Chi Ding, Junjie Wang, Hui-Tian Wang, Dingyu Xing and Jian Sun, Hot-Ham: an accurate and efficient E(3)-equivariant machine-learning electronic structures calculation framework, Chinese Physics Letters (2025). https://doi.org/10.1088/0256-307X/43/2/020704
+## 5.Documentation
+Documentation for Hot-Ham is available through the [Hot-Ham skill](hotham-skills/SKILL.md).
+
+## 6.Reference
+[1] Zhixin Liang, Yunlong Wang, Chi Ding, Junjie Wang, Hui-Tian Wang, Dingyu Xing and Jian Sun, Hot-Ham: an accurate and efficient E(3)-equivariant machine-learning electronic structures calculation framework, Chinese Physics Letters (2025). https://doi.org/10.1088/0256-307X/43/2/020704
+
+[2] Yunlong Wang, Zhixin Liang, Chi Ding, Junjie Wang, Zheyong Fan, Hui-Tian Wang, Dingyu Xing and Jian Sun, GPUTB: Efficient machine learning tight-binding method for large-scale electronic properties calculations, Computational Materials Today, 8, 100039 (2025). https://doi.org/10.1016/j.commt.2025.100039
+
+[3] Yunlong Wang, Zhixin Liang, Chi Ding, Junjie Wang, Zheyong Fan, Hui-Tian Wang, Dingyu Xing and Jian Sun, GPUTB-2: An efficient E(3) network method for learning high-precision orthogonal Hamiltonian, arXiv:2601.13656 (2026). https://doi.org/10.48550/arXiv.2601.13656

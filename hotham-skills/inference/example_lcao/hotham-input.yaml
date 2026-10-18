@@ -1,0 +1,29 @@
+trainset: ./trainset.pth
+H_target: complete
+
+orbit:
+  C: [1s,2s,2p,3p,3d]
+spin: false
+magnetism: false
+
+hamiltonian_type: lcao
+prediction: 2
+write: [h_ref, h_pred, olp]
+init_from_checkpoint: ./cp3000.pth
+lambda_2: 0.0
+shuffle: true
+lr: 0.02
+epoch: 3000
+batch_size: 1
+device: cuda
+int_dtype: int64
+float_dtype: float32
+model_save_path: ./.
+checkpoint_interval: 500
+
+version: 1
+rc: 6.4
+basis_size: 32
+L_max: 7
+Ce: [16,16,32]
+Co: [0,0,32]

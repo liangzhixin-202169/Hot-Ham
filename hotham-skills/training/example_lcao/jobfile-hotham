@@ -1,0 +1,17 @@
+#!/bin/bash
+#SBATCH --partition=83a100ib
+#SBATCH --gres=gpu:1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --output=out.%j
+#SBATCH --error=err.%j
+#SBATCH --job-name=hotham
+
+export OMP_NUM_THREADS=1
+export NUM_GPUS=1
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+MASTER_PORT=$((1000 + RANDOM % 50000))
+
+source /fsb/home/jiansun/js_liny/software_env/miniconda3/etc/profile.d/conda.sh
+conda activate hotham_dev1
+torchrun --nproc_per_node=$NUM_GPUS --master_port=$MASTER_PORT -m hotham.entrypoints.main hotham-input.yaml > log.txt

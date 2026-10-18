@@ -1,0 +1,13 @@
+#!/bin/bash
+#SBATCH --partition=83a100ib
+#SBATCH --gres=gpu:1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --output=out
+#SBATCH --error=err
+#SBATCH --job-name=diag
+
+source /fsb/home/jiansun/js_liny/software_env/miniconda3/etc/profile.d/conda.sh
+conda activate py313
+python diagonal.py -diag
+

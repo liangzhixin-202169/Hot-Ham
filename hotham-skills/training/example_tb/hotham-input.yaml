@@ -1,0 +1,32 @@
+trainset: ./trainset.pth
+testset: ./testset.pth
+
+hamiltonian_type: orthtb
+prediction: 0
+int_dtype: int64
+float_dtype: float32
+orbit:
+  Ga: [4s, 4p, 3d]
+  As: [4s, 4p, 3d]
+
+band_range: [0, 7]
+e_range: [-50, 50]
+using_element_net: true
+using_soc: false
+using_dosloss: false
+delta: 0.1
+
+rc: 7.0
+L_max: 8
+basis_size: 64
+Ce: [16, 16, 32]
+Co: [0, 0, 32]
+
+lambda_2: 0.0001
+factor: 0.975
+threshold: 0.1
+lr: 0.002
+epoch: 100000
+seed: 42
+model_save_path: ./.
+checkpoint_interval: 10000

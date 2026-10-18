@@ -9,30 +9,31 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from ase import Atoms
 from ase.io import read
+from ase.units import Rydberg
 from typing import Literal, Optional
 from scipy.special import erfc
 from collections import Counter
 
-RYDBERG_TO_EV = 13.605693122994
-
 class Electron():
     def __init__(self, inputfile):
         self.para = inputfile
-        if self.para["precision"] == "float32":
+        if self.para["int_dtype"] == "int32":
             self.numpy_int_dtype = np.int32
+            self.torch_int_dtype = torch.int32
+        elif self.para["int_dtype"] == "int64":
+            self.numpy_int_dtype = np.int64
+            self.torch_int_dtype = torch.int64
+        if self.para["float_dtype"] == "float32":
             self.numpy_float_dtype = np.float32
             self.numpy_complex_dtype = np.complex64
-            self.torch_int_dtype = torch.int32
             self.torch_float_dtype = torch.float32
             self.torch_complex_dtype = torch.complex64
-        elif self.para["precision"] == "float64":
-            self.numpy_int_dtype = np.int64
+        elif self.para["float_dtype"] == "float64":
             self.numpy_float_dtype = np.float64
             self.numpy_complex_dtype = np.complex128
-            self.torch_int_dtype = torch.int64
             self.torch_float_dtype = torch.float64
             self.torch_complex_dtype = torch.complex128
-        
+
         self.matrix_HR_pred = {}
         self.matrix_SR = {}
         self.href_csr = self.para.get("H_ref_csr")
@@ -42,7 +43,7 @@ class Electron():
 
         time_start = time.time()
         self.device = self.para["device"]
-        self.atoms = read(self.para["structure"])        
+        self.atoms = read(self.para["structure"])
         self.read_csr_HR_and_SR()
         self.kpoints_band, self.k_distance_band, self.special_k_band = self.seek_kpath(self.atoms, self.para["band_kpoints_path"], self.para["band_kpoints_pbc"], self.para["band_kpoints_num"])
         self.kpoints_dos, self.kpoints_weight_dos = self.get_dense_grid(self.atoms, self.para["dos_kpoints_grid"], self.para["dos_kpoints_use_irreducible_k"], using_car=False)
@@ -103,7 +104,11 @@ class Electron():
                     nnz = int(parts[3])
                     cell_shifts[icell] = [Rx, Ry, Rz]
                     if nnz > 0:
-                        values = np.fromstring(next(f).strip(), sep=' ', dtype=self.numpy_float_dtype)
+                        value_line = next(f).strip()
+                        if value_line.startswith("("):
+                            values = np.array([complex(*map(float, value.strip("()").split(","))) for value in value_line.split()], dtype=self.numpy_complex_dtype)
+                        else:
+                            values = np.fromstring(value_line, sep=' ', dtype=self.numpy_float_dtype)
                         col_ind = np.fromstring(next(f).strip(), sep=' ', dtype=self.numpy_int_dtype)
                         row_ptr = np.fromstring(next(f).strip(), sep=' ', dtype=self.numpy_int_dtype)
                         counts = row_ptr[1:] - row_ptr[:-1]
@@ -118,7 +123,7 @@ class Electron():
             col = np.concatenate(all_col)
             value = np.concatenate(all_value)
             if target in ["HR_pred", "HR_ref"]:
-                value = (value * RYDBERG_TO_EV).astype(self.numpy_float_dtype, copy=False)
+                value = (value * Rydberg).astype(self.numpy_complex_dtype if np.iscomplexobj(value) else self.numpy_float_dtype, copy=False)
                 # Rydberg to eV
             target_dict = self.matrix_HR_pred if target == "HR_pred" else self.matrix_HR_ref if target == "HR_ref" else self.matrix_SR
             target_dict['cell_shifts'] = cell_shifts
@@ -136,6 +141,7 @@ class Electron():
             matrix_HR = self.matrix_HR_ref
         Hk = np.zeros((matrix_HR['dim'], matrix_HR['dim']), dtype=self.numpy_complex_dtype)
         Sk = np.zeros((self.matrix_SR['dim'], self.matrix_SR['dim']), dtype=self.numpy_complex_dtype)
+        # Match ABACUS 3.10.1 func_folding.cpp: H(k) = sum_R H(R) exp(+i 2pi k.R).
         phase_H = np.exp(1j * 2 * np.pi * (matrix_HR['cell_shifts'] @ k)).astype(self.numpy_complex_dtype, copy=False)
         phase_S = np.exp(1j * 2 * np.pi * (self.matrix_SR['cell_shifts'] @ k)).astype(self.numpy_complex_dtype, copy=False)
         np.add.at(Hk, (matrix_HR['row'], matrix_HR['col']), matrix_HR['value'] * phase_H[matrix_HR['cell_idx']])
@@ -149,17 +155,15 @@ class Electron():
             matrix_HR = self.matrix_HR_ref
         phase_H = np.exp(1j * 2 * np.pi * (matrix_HR['cell_shifts'] @ k)).astype(self.numpy_complex_dtype, copy=False)
         phase_S = np.exp(1j * 2 * np.pi * (self.matrix_SR['cell_shifts'] @ k)).astype(self.numpy_complex_dtype, copy=False)
-        # 只保留上三角的非零元
-        mask_H = matrix_HR['row'] <= matrix_HR['col']
-        mask_S = self.matrix_SR['row'] <= self.matrix_SR['col']
+        # Export the complete matrices.
         Hk = sp.coo_matrix(
-            (matrix_HR['value'][mask_H] * phase_H[matrix_HR['cell_idx'][mask_H]], (matrix_HR['row'][mask_H], matrix_HR['col'][mask_H])),
+            (matrix_HR['value'] * phase_H[matrix_HR['cell_idx']], (matrix_HR['row'], matrix_HR['col'])),
             shape=(matrix_HR['dim'], matrix_HR['dim']),
-        ).tocsc()
+        ).tocsr()
         Sk = sp.coo_matrix(
-            (self.matrix_SR['value'][mask_S] * phase_S[self.matrix_SR['cell_idx'][mask_S]], (self.matrix_SR['row'][mask_S], self.matrix_SR['col'][mask_S])),
+            (self.matrix_SR['value'] * phase_S[self.matrix_SR['cell_idx']], (self.matrix_SR['row'], self.matrix_SR['col'])),
             shape=(self.matrix_SR['dim'], self.matrix_SR['dim']),
-        ).tocsc()
+        ).tocsr()
         return Hk, Sk
 
     def get_fermi_energy(self, eigvals: np.ndarray, kweight: np.ndarray, valence_electrons: int) -> float:
@@ -169,7 +173,7 @@ class Electron():
         eup = self.numpy_float_dtype(eigvals.max() + 2 * sigma)
         for _ in range(100):
             e_fermi = self.numpy_float_dtype(0.5 * (elw + eup))
-            n_electron = (0.5 * 2.0 * kweight[:, None] * erfc((eigvals - e_fermi) / sigma)).sum()
+            n_electron = (0.5 * (1.0 if self.para["soc"] else 2.0) * kweight[:, None] * erfc((eigvals - e_fermi) / sigma)).sum()
             if abs(n_electron - valence_electrons) < 1.0e-10:
                 return e_fermi
             if n_electron < valence_electrons:
@@ -185,12 +189,12 @@ class Electron():
         shifted_eigvals = eigvals - self.numpy_float_dtype(efermi)
         delta_e = energy_range[:, None, None] - shifted_eigvals[None, :, :]
         gaussian = np.exp(-0.5 * (delta_e / sigma) ** 2)
-        prefactor = self.numpy_float_dtype(2.0 / (np.sqrt(2.0 * np.pi) * sigma))
+        prefactor = self.numpy_float_dtype((1.0 if self.para["soc"] else 2.0) / (np.sqrt(2.0 * np.pi) * sigma))
         dos = prefactor * (gaussian * kweight[None, :, None]).sum(axis=(1, 2))
         return dos
 
     def run(self):
-        # 稀疏化存储HR和SR，计算本征值时构造稠密Hk和Sk       
+        # 稀疏化存储HR和SR，计算本征值时构造稠密Hk和Sk
         # 先算dos和fermi，再算band
         eigvals_dos_pred = np.empty((len(self.kpoints_dos), self.matrix_HR_pred["dim"]), dtype=self.numpy_float_dtype)
         for ik, k in enumerate(tqdm(self.kpoints_dos, desc="Diagonalizing H(k)_pred for dos and fermi")):
@@ -236,13 +240,13 @@ class Electron():
                 H_prime = torch.linalg.solve_triangular(L, X.transpose(-1, -2).conj(), upper=False).transpose(-1, -2).conj()
                 eigvals_band_ref[ik] = torch.linalg.eigvalsh(H_prime).cpu().numpy()
             eigvals_band_ref -= efermi_ref
-    
+
         #plot dos and band
         efermi_fmt = ".6f" if self.numpy_float_dtype == np.float32 else ".12f"
         print(f"Fermi energy (pred): {efermi_pred:{efermi_fmt}} eV")
         if self.has_H_ref:
             print(f"Fermi energy (ref): {efermi_ref:{efermi_fmt}} eV")
-            
+
         save_dos = {"dos_energy_range": dos_energy_range,"dos": dos_pred,"efermi": efermi_pred,}
         if self.has_H_ref:
             save_dos["dos_ref"] = dos_ref
@@ -321,22 +325,25 @@ class Electron():
 
 if __name__ == "__main__":
     inputfile = {
-        "precision": "float64",
+        "int_dtype": "int64",
+        "float_dtype": "float32",
         "device": "cuda",
         "structure": "./model.xyz",
         "valence_electrons": {"H": 1, "B": 3, "C": 4, "N": 5, "O": 6, "Mg": 10, "P": 5, "S": 6, "Ti": 12, "Nb": 13, "Mo": 14},
+
+        "soc": False,
         "H_pred_csr": "./h_pred.csr",
+        # if H_ref_csr is omitted, will skip calculations for H_ref
         "H_ref_csr": "./h_ref.csr",
         "S_csr": "./olp.csr",
-        # if H_ref_csr is omitted, will skip calculations for H_ref
 
         # para band
-        "band_kpoints_num":90,
+        "band_kpoints_num":45,
         "band_kpoints_path":"GKMG",
         "band_kpoints_pbc":[True, True, False],
-        
+
         # para dos
-        "dos_kpoints_grid":[10,10,1],
+        "dos_kpoints_grid":[12,12,1],
         "dos_kpoints_use_irreducible_k": True,
         "dos_sigma": 0.05,
         "dos_energy_range": [-2, 2, 400],

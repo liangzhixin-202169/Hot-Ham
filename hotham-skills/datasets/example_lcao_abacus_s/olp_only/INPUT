@@ -1,0 +1,17 @@
+INPUT_PARAMETERS
+# Created by Atomic Simulation Enviroment
+basis_type                              lcao
+dft_functional                          PBE
+kspacing                                0.1
+calculation                             get_S
+symmetry                                -1
+out_chg                                 -1
+ecutwfc                                 100
+scf_thr                                 1e-08
+scf_nmax                                100
+smearing_method                         fd
+mixing_type                             broyden
+mixing_beta                             0.8
+ntype                                   1
+pseudo_dir                              /fsb/home/jiansun/js_liny/software/abacus-develop-3.10.1/pseudopotentials/sg15_oncv_upf
+orbital_dir                             /fsb/home/jiansun/js_liny/software/abacus-develop-3.10.1/orbitals/SG15-Version1p0__StandardOrbitals-Version2p0

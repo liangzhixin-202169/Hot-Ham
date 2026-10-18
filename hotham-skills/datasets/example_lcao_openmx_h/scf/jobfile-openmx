@@ -1,0 +1,40 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --error=err.%j
+#SBATCH --output=out.%j
+#SBATCH --ntasks=4
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=openmx
+#SBATCH --partition=6338
+
+module purge
+module load oneapi/2024.0/compiler
+module load oneapi/2024.0/mpi
+module load oneapi/2024.0/mkl
+
+export OMP_NUM_THREADS=1
+export OPENMX='/fsb/home/jiansun/js_liny/software/openmx4.0/work/openmx'
+export OPENMX2HOTHAM='/fsb/home/jiansun/js_liny/software/Hot-Ham-dev1/interface/openmx/ver4.0.1/generate_dataset/openmx2hotham'
+
+if [ ! -f finished ] && [ ! -f unfinished ] && [ ! -f computing ] && [ ! -f failed ]; then
+   touch computing
+   if ! srun --mpi=pmi2 -n 4 "$OPENMX" openmx.dat > log; then
+      touch failed
+      rm -f computing
+      exit 1
+   fi
+   if grep -Fq 'The SCF was not fully achieved' log; then
+      touch unfinished
+      rm -f computing
+      exit 0
+   fi
+   if ! srun --mpi=pmi2 -n 1 "$OPENMX2HOTHAM" openmx.scfout ham olp > hamiltonian.txt; then
+      touch failed
+      rm -f computing
+      exit 1
+   fi
+   rm -rf openmx_rst
+   rm -f *.cube
+   touch finished
+   rm -f computing
+fi
