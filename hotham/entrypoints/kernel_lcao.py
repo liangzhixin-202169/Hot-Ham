@@ -94,32 +94,31 @@ class Kernel(torch.nn.Module):
 
             mse_global, mae_global = self.train_lossrecord.global_loss(self.device, self.para.torch_float_dtype)
             if self.para.rank == 0:
-                info_global = f"Epoch:{epoch+1:>5}   lr: {current_lr:.3e}" + f"   Train_MSE: {mse_global:.7f}   Train_MAE: {mae_global:.7f}"
+                info_global = f"Epoch:{epoch+1}  lr:{current_lr:.7f}  Train_MSE:{mse_global:.7f}  Train_MAE:{mae_global:.7f}"
 
             if self.para.lr_scheduler == "ExponentialLR":
                 self.lr_scheduler.step()
             elif self.para.lr_scheduler == "ReduceLROnPlateau":
                 self.lr_scheduler.step(mae_global.item())
 
-            is_last_epoch = epoch + 1 == self.start_epoch + self.para.epoch
-            if (epoch + 1) % self.para.checkpoint_interval == 0 or is_last_epoch:
-                self.model.eval()
-                with torch.no_grad():
-                    for data in self.testsetloader:
-                        data.to(self.device)
-                        H_block = self.model(data)
-                        test_loss_MSE, test_loss_MAE, num_ele = self.lossfunction.ham_loss(H_block, self.model.module.AtomType_OrbitalSum, data)
-                        self.test_lossrecord.update(test_loss_MSE.item(), test_loss_MAE.item(), num_ele)
+            self.model.eval()
+            with torch.no_grad():
+                for data in self.testsetloader:
+                    data.to(self.device)
+                    H_block = self.model(data)
+                    test_loss_MSE, test_loss_MAE, num_ele = self.lossfunction.ham_loss(H_block, self.model.module.AtomType_OrbitalSum, data)
+                    self.test_lossrecord.update(test_loss_MSE.item(), test_loss_MAE.item(), num_ele)
 
-                    mse_global, mae_global = self.test_lossrecord.global_loss(self.device, self.para.torch_float_dtype)
-                    if self.para.rank == 0:
-                        info_global += f"   Test_MSE: {mse_global:.7f}   Test_MAE: {mae_global:.7f}"
-
+                mse_global, mae_global = self.test_lossrecord.global_loss(self.device, self.para.torch_float_dtype)
                 if self.para.rank == 0:
-                    self.save_checkpoint(epoch)
+                    info_global += f"  Test_MSE:{mse_global:.7f}  Test_MAE:{mae_global:.7f}"
+
+            is_last_epoch = epoch + 1 == self.start_epoch + self.para.epoch
+            if self.para.rank == 0 and ((epoch + 1) % self.para.checkpoint_interval == 0 or is_last_epoch):
+                self.save_checkpoint(epoch)
 
             if self.para.rank == 0:
-                info_global += f"   Time: {time.perf_counter() - epoch_start:.3f} s"
+                info_global += f"  Time:{time.perf_counter() - epoch_start:.3f}s"
                 print(info_global)
                 sys.stdout.flush()
 
@@ -139,8 +138,8 @@ class Kernel(torch.nn.Module):
             if self.para.rank == 0:
                 info_global = (
                     f"Train:\n"
-                    + f"    MSE(eV^2): {mse_global:.7f}    MAX: {mse_global_max:.7f}    MIN: {mse_global_min:.7f}\n"
-                    + f"    MAE(eV):   {mae_global:.7f}    MAX: {mae_global_max:.7f}    MIN: {mae_global_min:.7f}\n"
+                    + f"  MSE(eV^2):{mse_global:.7f}  MAX:{mse_global_max:.7f}  MIN:{mse_global_min:.7f}\n"
+                    + f"  MAE(eV):{mae_global:.7f}  MAX:{mae_global_max:.7f}  MIN:{mae_global_min:.7f}\n"
                 )
 
             for data in self.testsetloader:
@@ -156,8 +155,8 @@ class Kernel(torch.nn.Module):
             if self.para.rank == 0:
                 info_global += (
                     f"Test:\n"
-                    + f"    MSE(eV^2): {mse_global:.7f}    MAX: {mse_global_max:.7f}    MIN: {mse_global_min:.7f}\n"
-                    + f"    MAE(eV):   {mae_global:.7f}    MAX: {mae_global_max:.7f}    MIN: {mae_global_min:.7f}\n"
+                    + f"  MSE(eV^2):{mse_global:.7f}  MAX:{mse_global_max:.7f}  MIN:{mse_global_min:.7f}\n"
+                    + f"  MAE(eV):{mae_global:.7f}  MAX:{mae_global_max:.7f}  MIN:{mae_global_min:.7f}\n"
                 )
 
             if self.para.rank == 0:
@@ -582,10 +581,10 @@ class Kernel(torch.nn.Module):
         else:
             initial_lr = checkpoint["optimizer_state_dict"]["param_groups"][0]["lr"]
 
-        if self.para.version == 2:
-            from ..entrypoints.model_lcao_mag import Model
-        else:
-            from ..entrypoints.model_lcao import Model
+        if self.para.spin is False and self.para.magnetism is False:
+            from .model_lcao_nonmag import Model
+        elif self.para.spin is True and self.para.magnetism is True:
+            from .model_lcao_mag import Model
 
         default_dtype = torch.get_default_dtype()
         try:
@@ -643,7 +642,7 @@ class Kernel(torch.nn.Module):
                     param_group["lr"] = self.para.new_lr
 
             self.checkpoint_info = (
-                f"Epoch:{checkpoint['epoch']:>5}   lr: {self.optimizer.state_dict()['param_groups'][0]['lr']:.3e}   "
-                + f"Train_MSE: {checkpoint['Train_MSE']:.7f}   Train_MAE: {checkpoint['Train_MAE']:.7f}   "
-                + f"Test_MSE: {checkpoint['Test_MSE']:.7f}   Test_MAE: {checkpoint['Test_MAE']:.7f}"
+                f"Epoch:{checkpoint['epoch']}  lr:{self.optimizer.state_dict()['param_groups'][0]['lr']:.10f}  "
+                + f"Train_MSE:{checkpoint['Train_MSE']:.7f}  Train_MAE:{checkpoint['Train_MAE']:.7f}  "
+                + f"Test_MSE:{checkpoint['Test_MSE']:.7f}  Test_MAE:{checkpoint['Test_MAE']:.7f}"
             )

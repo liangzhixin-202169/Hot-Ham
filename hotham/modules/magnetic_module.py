@@ -159,25 +159,21 @@ class MagMessagePassing(torch.nn.Module):
         Conv_layers = torch.nn.ModuleList([])
         if self.para.using_layernorm3:
             LayerNorm_node, LayerNorm_edge = torch.nn.ModuleList([]), torch.nn.ModuleList([])
-        if self.para.self_interaction:
-            SelfInteractions = torch.nn.ModuleList([])
-        if self.para.self_interaction_by_edge:
-            SelfInteractions_by_edge = torch.nn.ModuleList([])
+        SelfInteractions_by_edge = torch.nn.ModuleList([])
         if self.para.using_longrange:
             Longranges = torch.nn.ModuleList([])
         for layer_index in range(len(self.irreps_mids)):
             if layer_index == 0:
                 irreps_edge_prev = self.irreps_edge
-                if self.para.self_interaction_by_edge:
-                    selfinteraction_by_edge = Self_Interaction_by_Edge(
-                        irreps_node=irreps_node,
-                        irreps_edge=irreps_node,
-                        irreps_localmagenv=self.local_mag_env.irreps_out,
-                        channel=self.para["mid_channel"][layer_index],
-                        para=self.para,
-                    )
-                    SelfInteractions_by_edge.append(selfinteraction_by_edge)
-                    irreps_edge_prev = selfinteraction_by_edge.irreps_out
+                selfinteraction_by_edge = Self_Interaction_by_Edge(
+                    irreps_node=irreps_node,
+                    irreps_edge=irreps_node,
+                    irreps_localmagenv=self.local_mag_env.irreps_out,
+                    channel=self.para["mid_channel"][layer_index],
+                    para=self.para,
+                )
+                SelfInteractions_by_edge.append(selfinteraction_by_edge)
+                irreps_edge_prev = selfinteraction_by_edge.irreps_out
                 generallocalconv = GeneralLocalConv(
                     irreps_node=self.irreps_node,
                     irreps_edge=irreps_edge_prev,
@@ -192,16 +188,15 @@ class MagMessagePassing(torch.nn.Module):
                 )
             else:
                 irreps_edge_prev = Conv_layers[-1].local_irreps_out
-                if self.para.self_interaction_by_edge:
-                    selfinteraction_by_edge = Self_Interaction_by_Edge(
-                        irreps_node=Conv_layers[-1].local_irreps_out,
-                        irreps_edge=irreps_edge_prev,
-                        irreps_localmagenv=self.local_mag_env.irreps_out,
-                        channel=self.para["mid_channel"][layer_index],
-                        para=self.para,
-                    )
-                    SelfInteractions_by_edge.append(selfinteraction_by_edge)
-                    irreps_edge_prev = selfinteraction_by_edge.irreps_out
+                selfinteraction_by_edge = Self_Interaction_by_Edge(
+                    irreps_node=Conv_layers[-1].local_irreps_out,
+                    irreps_edge=irreps_edge_prev,
+                    irreps_localmagenv=self.local_mag_env.irreps_out,
+                    channel=self.para["mid_channel"][layer_index],
+                    para=self.para,
+                )
+                SelfInteractions_by_edge.append(selfinteraction_by_edge)
+                irreps_edge_prev = selfinteraction_by_edge.irreps_out
                 generallocalconv = GeneralLocalConv(
                     irreps_node=Conv_layers[-1].local_irreps_out,
                     irreps_edge=irreps_edge_prev,
@@ -220,15 +215,6 @@ class MagMessagePassing(torch.nn.Module):
                 LayerNorm_node.append(TO3LayerNormal(irreps_in=Conv_layers[layer_index].local_irreps_out, floatdtype=para.torch_float_dtype))
                 LayerNorm_edge.append(TO3LayerNormal(irreps_in=Conv_layers[layer_index].local_irreps_out, floatdtype=para.torch_float_dtype))
 
-            if self.para.self_interaction:
-                selfinteraction = Self_interaction(
-                    irreps_in=Conv_layers[layer_index].local_irreps_out,
-                    irreps_out=Conv_layers[layer_index].local_irreps_out,
-                    channel=self.para["self_interaction_channel"][layer_index],
-                    para=self.para,
-                )
-                SelfInteractions.append(selfinteraction)
-
             if self.para.using_longrange:
                 longrange = LongRange(irreps_node=Conv_layers[layer_index].local_irreps_out, para=self.para)
                 Longranges.append(longrange)
@@ -240,10 +226,7 @@ class MagMessagePassing(torch.nn.Module):
         if self.para.using_layernorm3:
             self.LayerNorm_node = LayerNorm_node
             self.LayerNorm_edge = LayerNorm_edge
-        if self.para.self_interaction:
-            self.SelfInteractions = SelfInteractions
-        if self.para.self_interaction_by_edge:
-            self.SelfInteractions_by_edge = SelfInteractions_by_edge
+        self.SelfInteractions_by_edge = SelfInteractions_by_edge
         if self.para.using_longrange:
             self.Longranges = Longranges
 
@@ -258,10 +241,9 @@ class MagMessagePassing(torch.nn.Module):
         local_mag_env = self.local_mag_env(x=mag_sh_emb, length_emb=length_emb, mag_length_emb=mag_length_emb, data=data)
 
         for layer_index in range(len(self.irreps_mids)):
-            if self.para.self_interaction_by_edge:
-                f_edge = self.SelfInteractions_by_edge[layer_index](
-                    f_node=f_node, f_edge=f_edge, local_mag_env=local_mag_env, length_emb=length_emb, mag_length_emb=mag_length_emb, data=data
-                )
+            f_edge = self.SelfInteractions_by_edge[layer_index](
+                f_node=f_node, f_edge=f_edge, local_mag_env=local_mag_env, length_emb=length_emb, mag_length_emb=mag_length_emb, data=data
+            )
             f_node, f_edge = self.Conv_layers[layer_index](
                 f_node=f_node,
                 f_edge=f_edge,
@@ -276,8 +258,6 @@ class MagMessagePassing(torch.nn.Module):
             if self.para.using_layernorm3:
                 f_node = self.LayerNorm_node[layer_index](f_node)
                 f_edge = self.LayerNorm_edge[layer_index](f_edge)
-            if self.para.self_interaction:
-                f_node = self.SelfInteractions[layer_index](f_node)
             if self.para.using_longrange:
                 f_node_lr = self.Longranges[layer_index](f_node, data)
                 f_node = (f_node + f_node_lr) / (2**0.5)

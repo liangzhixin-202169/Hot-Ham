@@ -11,7 +11,7 @@ from ..modules.general_local_convolution import GeneralLocalConv
 from ..modules.common import MCST, E3LayerNormal, MyScatter
 from ..modules.output_linear import OutputLinear
 from ..modules.magnetic_module import MagMessagePassing
-from ..modules.te3nn.to3 import TO3_Irrep, TO3_Irreps, TO3_Linear
+from ..modules.te3nn.to3 import TO3_Irreps, TO3_Linear
 from .basemodel import BaseModel
 
 
@@ -75,7 +75,7 @@ class Model(BaseModel):
         self.magnetism = para.magnetism
         if self.magnetism:
             if para.get("mid_channel") is None:
-                raise ValueError("Missing required input parameter 'mid_channel' for magnetic LCAO version 2")
+                raise ValueError("Missing required input parameter 'mid_channel' for magnetic LCAO")
             mmp_mid_to3_irreps_list = []
             for i in range(len(para["mid_channel"])):
                 channel = para["mid_channel"][i]
@@ -84,15 +84,7 @@ class Model(BaseModel):
                 mmp_mid_irreps += mmp_mid_irreps
                 t_ps += [-t_p for t_p in t_ps]
                 mmp_mid_to3_irreps = TO3_Irreps([(mul, (l, p, t_p)) for (mul, (l, p)), t_p in zip(mmp_mid_irreps, t_ps)])
-                mmp_mid_to3_irreps_reduced = TO3_Irreps(None)
-                if para["reduced_to3"]:
-                    # for mul, (l, p, t_p) in mmp_mid_to3_irreps:
-                    #     if TO3_Irrep((l, p, t_p)) in self.edge_to3_irreps_output:
-                    #         mmp_mid_to3_irreps_reduced += TO3_Irreps([(mul, (l, p, t_p))])
-                    # mmp_mid_to3_irreps_list.append(mmp_mid_to3_irreps_reduced)
-                    mmp_mid_to3_irreps_list.append(self.edge_to3_irreps_output.sort()[0].simplify())
-                else:
-                    mmp_mid_to3_irreps_list.append(mmp_mid_to3_irreps)
+                mmp_mid_to3_irreps_list.append(mmp_mid_to3_irreps)
 
             self.messagepassing = MagMessagePassing(
                 irreps_node=self.FeatureInitialize.irreps_out, irreps_mids=mmp_mid_to3_irreps_list, irreps_sh=self.irreps_sh, para=para

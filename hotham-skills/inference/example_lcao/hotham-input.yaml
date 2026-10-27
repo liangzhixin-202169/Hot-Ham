@@ -21,7 +21,6 @@ float_dtype: float32
 model_save_path: ./.
 checkpoint_interval: 500
 
-version: 1
 rc: 6.4
 basis_size: 32
 L_max: 7

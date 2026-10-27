@@ -355,53 +355,54 @@ class Kernel(torch.nn.Module):
                 train_dos_mae = self._global_average(train_stats[2], train_count)
 
             if self.para.rank == 0:
-                info = (f"Epoch:{epoch+1:>5}   lr: {current_lr:.3e}"
-                        f"   Train_MSE: {train_mse:.7f}   Train_MAE: {train_mae:.7f}")
+                info = (f"Epoch:{epoch+1}  lr:{current_lr:.7f}"
+                        f"  Train_MSE:{train_mse:.7f}  Train_MAE:{train_mae:.7f}")
                 if self.para.using_dosloss:
-                    info += f"   Train_MAE_DOS: {train_dos_mae:.7f}"
+                    info += f"  Train_MAE_DOS:{train_dos_mae:.7f}"
+
+            self.model.eval()
+            with torch.no_grad():
+                test_stats = torch.zeros(3, dtype=self.para.torch_float_dtype, device=self.device)
+                test_count = 0
+                for data in self.testsetloader:
+                    data.to(self.device)
+                    test_count += data.num_graphs
+
+                    if self.para.using_soc:
+                        H_block, self.GraphEdgeIndex_to_BlockEdgeIndex, soc_val = self.model(data)
+                        Eig_pre = self.compute_H_pre_soc(data, H_block, soc_val)
+                    else:
+                        H_block, self.GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
+                        Eig_pre = self.compute_H_pre(data, H_block)
+
+                    mse, mae = self.lossfunction.testloss_band(
+                        Eig_pre, data.Eig_ref, self.para.band_range, self.para.e_range
+                    )
+                    test_stats[0] += mse * data.num_graphs
+                    test_stats[1] += mae * data.num_graphs
+                    if self.para.using_dosloss:
+                        _, mae_dos = self.lossfunction.get_dos_loss(
+                            self.para.dos_sigma, 10000, Eig_pre[0], data.Eig_ref[0],
+                            self.para.band_range, self.device
+                        )
+                        test_stats[2] += mae_dos * data.num_graphs
+
+                mse_test = self._global_average(test_stats[0], test_count)
+                mae_test = self._global_average(test_stats[1], test_count)
+                if self.para.using_dosloss:
+                    mae_dos_test = self._global_average(test_stats[2], test_count)
+
+            if self.para.rank == 0:
+                info += f"  Test_MSE:{mse_test:.7f}  Test_MAE:{mae_test:.7f}"
+                if self.para.using_dosloss:
+                    info += f"  Test_MAE_DOS:{mae_dos_test:.7f}"
 
             is_last_epoch = epoch + 1 == self.start_epoch + self.para.epoch
             if (epoch + 1) % self.para.checkpoint_interval == 0 or is_last_epoch:
-                self.model.eval()
-                with torch.no_grad():
-                    test_stats = torch.zeros(3, dtype=self.para.torch_float_dtype, device=self.device)
-                    test_count = 0
-                    for data in self.testsetloader:
-                        data.to(self.device)
-                        test_count += data.num_graphs
-
-                        if self.para.using_soc:
-                            H_block, self.GraphEdgeIndex_to_BlockEdgeIndex, soc_val = self.model(data)
-                            Eig_pre = self.compute_H_pre_soc(data, H_block, soc_val)
-                        else:
-                            H_block, self.GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
-                            Eig_pre = self.compute_H_pre(data, H_block)
-
-                        mse, mae = self.lossfunction.testloss_band(
-                            Eig_pre, data.Eig_ref, self.para.band_range, self.para.e_range
-                        )
-                        test_stats[0] += mse * data.num_graphs
-                        test_stats[1] += mae * data.num_graphs
-                        if self.para.using_dosloss:
-                            _, mae_dos = self.lossfunction.get_dos_loss(
-                                self.para.dos_sigma, 10000, Eig_pre[0], data.Eig_ref[0],
-                                self.para.band_range, self.device
-                            )
-                            test_stats[2] += mae_dos * data.num_graphs
-
-                    mse_test = self._global_average(test_stats[0], test_count)
-                    mae_test = self._global_average(test_stats[1], test_count)
-                    if self.para.using_dosloss:
-                        mae_dos_test = self._global_average(test_stats[2], test_count)
-
                 self.output_model(epoch)
-                if self.para.rank == 0:
-                    info += f"   Test_MSE: {mse_test:.7f}   Test_MAE: {mae_test:.7f}"
-                    if self.para.using_dosloss:
-                        info += f"   Test_MAE_DOS: {mae_dos_test:.7f}"
 
             if self.para.rank == 0:
-                info += f"   Time: {time.perf_counter() - epoch_start:.3f} s"
+                info += f"  Time:{time.perf_counter() - epoch_start:.3f}s"
                 print(info)
                 sys.stdout.flush()
 

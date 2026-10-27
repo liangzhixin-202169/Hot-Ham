@@ -238,7 +238,7 @@ class BaseModel(nn.Module):
                     block_l3s_spins = torch.cat([block_l3s_spin0, block_l3s_spin1], dim=-1)
                     # (3) convert l3_list*(spin0+spin1) to (l1*l2)*(spin_half*spin_half)
                     cg_l1_l2_l3s = getattr(self, f"cg_{l1}_{l2}_l3s")
-                    H_l1l2_block = torch.einsum("ijk,nkl,lm->nmij", cg_l1_l2_l3s, block_l3s_spins, self.oyzx2spin)
+                    H_l1l2_block = torch.einsum("ijk,nkl,ml->nmij", cg_l1_l2_l3s, block_l3s_spins, self.oyzx2spin)
                     # # (4) convert (l1*l2)*(spin_half*spin_half) to (l1*spin_half)*(l2*spin_half)
                     # H_l1l2_block = self.spin_block_reshape(H_l1l2_block)
                     # H_l1l2_blocks[(index1, ir1)][(index2, ir2)] = H_l1l2_block

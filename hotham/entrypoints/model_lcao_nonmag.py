@@ -91,7 +91,7 @@ class Model(BaseModel):
         self.magnetism = para.magnetism
         if self.magnetism:
             if para.get("to3") is None:
-                raise ValueError("Missing required input parameter 'to3' for magnetic LCAO version 1")
+                raise ValueError("Missing required input parameter 'to3' for magnetic LCAO")
             mmp_mid_to3_irreps_reduced_list = []
             for i in range(len(para["to3"])):
                 channel = para["to3"][i]
@@ -101,10 +101,9 @@ class Model(BaseModel):
                 t_ps += [-t_p for t_p in t_ps]
                 mmp_mid_to3_irreps = TO3_Irreps([(mul, (l, p, t_p)) for (mul, (l, p)), t_p in zip(mmp_mid_irreps, t_ps)])
                 mmp_mid_to3_irreps_reduced = TO3_Irreps(None)
-                if para["reduced_to3"]:
-                    for mul, (l, p, t_p) in mmp_mid_to3_irreps:
-                        if TO3_Irrep((l, p, t_p)) in self.edge_to3_irreps_output:
-                            mmp_mid_to3_irreps_reduced += TO3_Irreps([(mul, (l, p, t_p))])
+                for mul, (l, p, t_p) in mmp_mid_to3_irreps:
+                    if TO3_Irrep((l, p, t_p)) in self.edge_to3_irreps_output:
+                        mmp_mid_to3_irreps_reduced += TO3_Irreps([(mul, (l, p, t_p))])
                 mmp_mid_to3_irreps_reduced_list.append(mmp_mid_to3_irreps_reduced)
 
             self.magmessagepassing = MagMessagePassing(

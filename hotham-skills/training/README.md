@@ -29,9 +29,7 @@ See the [parameter list](../parameters.md) for defaults and additional settings.
 
 ### LCAO only
 - `orbit`: all orbitals in the DFT basis, in the order used by the Hamiltonian matrices.
-- `version`: LCAO model version; the example uses `1`.
-- `spin`: whether to use the spinful model; the example uses `false`.
-- `magnetism`: whether to use magnetic message passing; the example uses `false`.
+- `spin` and `magnetism`: set both to `false` for the nonmagnetic model, or both to `true` for the magnetic model. The example uses `false`.
 
 ### OrthTB
 - `orbit`: higher-principal-quantum-number orbitals of the TB model, matching dataset generation.

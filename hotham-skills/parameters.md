@@ -13,8 +13,8 @@ Defaults below come from `hotham/entrypoints/parameters.py`; `—` means the par
 | `orbit` | — | dict | LCAO: include all orbitals of the DFT numerical basis in matrix order. <br>OrthTB: select the high-principal-quantum-number orbitals used by the TB model.<br>Keep the list and order consistent across dataset generation, training, and inference.|
 | `basis` | `"Gaussian"` | str | Radial distance embedding type. |
 | `basis_size` | `32` | int | Number of radial embedding features. |
-| `Ce` | — | list | Even-parity feature channels at each network layer; unused in LCAO version 2. |
-| `Co` | — | list | Odd-parity feature channels at each network layer; unused in LCAO version 2. |
+| `Ce` | — | list | Even-parity feature channels in the nonmagnetic LCAO model; unused in the magnetic model. |
+| `Co` | — | list | Odd-parity feature channels in the nonmagnetic LCAO model; unused in the magnetic model. |
 | `edge_include_sc` | `True` | bool | Controls onsite self-interaction edges and their Wigner matrices in data generation. |
 | `L_max` | — | int | Maximum angular-momentum order of equivariant features. |
 | `rc` | — | float | Radial embedding cutoff in Å for both models; OrthTB also uses it as the neighbor cutoff when generating graph edges. |
@@ -53,8 +53,7 @@ Use the same `int_dtype` and `float_dtype` for training and inference with a che
 | Parameter | Default | Type | Description |
 | --- | --- | --- | --- |
 | **Switches** | | | |
-| `version` | — | int | `1` for non-mag, `2` for mag(in dev) |
-| `model_type` | `0` | int | Selects the Gaunt-convolution implementation (`0` or `1`) for LCAO version 1; unused in version 2. |
+| `model_type` | `0` | int | Selects the Gaunt-convolution implementation (`0` or `1`) for nonmagnetic LCAO; unused in the magnetic model. |
 | `spin` | — | bool | Enable spinful LCAO model and loss handling. |
 | `magnetism` | — | bool | Enable the magnetic message-passing branch of the LCAO model. |
 | **Other** | | | |
@@ -70,19 +69,17 @@ Use the same `int_dtype` and `float_dtype` for training and inference with a che
 | Parameter | Default | Type | Description |
 | --- | --- | --- | --- |
 | **Model channels** | | | |
-| `first_channel` | — | int | Initial feature-channel count in the version-2 LCAO model. |
-| `mid_channel` | — | list | Magnetic message-passing channel sizes in the version-2 LCAO model. |
-| `to3` | — | list | Magnetic message-passing channel sizes in the version-1 LCAO model. |
+| `first_channel` | — | int | Initial feature-channel count in the magnetic LCAO model. |
+| `mid_channel` | — | list | Magnetic message-passing channel sizes. |
+| `to3` | — | list | Legacy magnetic message-passing channels in the nonmagnetic model file; not used by the supported nonmagnetic route. |
 | **Magnetic message passing** | | | |
 | `mag_cutoff` | — | list | Cutoff radius for the magnetic embedding. |
-| `reduced_to3` | — | bool | Reduce magnetic TO3 irreducible representations to output-compatible ones. |
-| `self_interaction` | — | bool | Enable self-interaction blocks in magnetic message passing. |
-| `self_interaction_channel` | — | list | Per-layer channel counts for magnetic self-interaction. |
-| `self_interaction_by_edge` | — | bool | Enable edge-based self-interaction in magnetic message passing. |
-| `using_layernorm3` | — | bool | Enable magnetic message-passing layer normalization. |
+| `using_layernorm3` | — | bool | Normalize node and edge features after each magnetic TO2 convolution. |
 | `using_longrange` | — | bool | Enable long-range magnetic message-passing blocks. |
 | **Loss** | | | |
 | `H_target` | — | str | Spinful LCAO Hamiltonian loss target: `real`, `imag`, or `complete`. |
+
+LCAO selects `model_lcao_nonmag.py` when `spin` and `magnetism` are both `false`, and `model_lcao_mag.py` when both are `true`. Mixed settings are not supported. The magnetic model builds each layer's TO3 representation from `mid_channel`; the nonmagnetic model uses `Ce` and `Co`.
 
 ### Training parameters (OrthTB)
 | Parameter | Default | Type | Description |

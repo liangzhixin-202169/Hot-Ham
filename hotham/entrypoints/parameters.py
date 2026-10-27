@@ -13,12 +13,11 @@ INPUT_PARAMETERS = frozenset({
     "testset", "batch_size", "shuffle", "optimizer", "lambda_2", "lr",
     "new_lr", "lr_scheduler", "factor", "patience", "threshold", "gamma",
     "model_save_path", "checkpoint_interval", "init_from_checkpoint",
-    "epoch", "seed", "version", "model_type", "fix_average",
+    "epoch", "seed", "model_type", "fix_average",
     "loss_abort_threshold", "refresh_o3_linear_in_eval", "restrict_last_out",
     "using_layernorm", "using_layernorm2", "using_rearrangement_linear",
     "magnetism", "spin", "first_channel", "mid_channel", "to3",
-    "mag_cutoff", "reduced_to3", "self_interaction",
-    "self_interaction_channel", "self_interaction_by_edge", "using_layernorm3",
+    "mag_cutoff", "using_layernorm3",
     "using_longrange", "H_target", "band_range", "delta", "dos_sigma", "dos_weight",
     "dump_sparseH", "e_range", "k_gap", "nn_split_scale", "structures_path",
     "using_dosloss", "using_element_net", "using_soc", "weight_M", "weight_V",
@@ -52,6 +51,11 @@ def validate_input_parameters(para):
         raise ValueError("Invalid OrthTB prediction mode")
     if para.get("hamiltonian_type") == "lcao" and para.get("prediction") not in (0, 1, 2):
         raise ValueError("Invalid LCAO prediction mode")
+    if para.get("hamiltonian_type") == "lcao":
+        if not isinstance(para.get("spin"), bool) or not isinstance(para.get("magnetism"), bool):
+            raise ValueError("LCAO requires boolean 'spin' and 'magnetism' parameters")
+        if para["spin"] != para["magnetism"]:
+            raise ValueError("LCAO supports only spin=magnetism=False or spin=magnetism=True")
 
 
 class Parameters(dict):
