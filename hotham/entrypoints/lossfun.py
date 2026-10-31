@@ -136,6 +136,12 @@ class Lossfunction(object):
                 h_pred = H_block[atomsymbol_1][atomsymbol_2]
                 h_ref = data.HR[atomsymbol_1][atomsymbol_2]
 
+                if h_ref.shape != h_pred.shape:
+                    raise ValueError(
+                        f"shape mismatch for {atomsymbol_1}/{atomsymbol_2}: "
+                        f"ref {tuple(h_ref.shape)} vs pred {tuple(h_pred.shape)}"
+                    )
+
                 if not self.para.spin:
                     abs_diff.append(torch.abs(h_ref - h_pred).flatten())
                 else:

@@ -515,14 +515,12 @@ class AbacusData(DataBase):
             if has_HR:
                 if key_dft in HR:
                     if nspin == 1:
-                        # H_spin_o1_o2 = HR[key_dft][start1:start1+o1, start2:start2+o2][None, ...]
-                        H_spin_o1_o2 = HR[key_dft][start1:start1+o1, start2:start2+o2]
+                        H_spin_o1_o2 = HR[key_dft][start1:start1+o1, start2:start2+o2][None, ...]
                         H_block[atomsymbol_1][atomsymbol_2].append(H_spin_o1_o2)
                     elif nspin > 1:
                         raise NotImplementedError("Interface for nspin>1 is under development")
                 else:
-                    H_spin_o1_o2 = torch.zeros((o1, o2), dtype=self.torch_float_dtype)
-                    # H_spin_o1_o2 = np.zeros((o1,o2))[None, ...]
+                    H_spin_o1_o2 = torch.zeros((1, o1, o2), dtype=self.torch_float_dtype)
                     H_block[atomsymbol_1][atomsymbol_2].append(H_spin_o1_o2)
                     # raise KeyError(f"Can't find {key_dft} derived by ase in abacus's neighbor list")
             if has_iHR:
@@ -559,8 +557,7 @@ class AbacusData(DataBase):
                 winger_D_2 = self.get_wigner_D(self.AtomSymbol_to_AMList[atomsymbol_2])
                 if has_HR and (len(H_block[atomsymbol_1][atomsymbol_2]) != 0):
                     H_block[atomsymbol_1][atomsymbol_2] = torch.stack(H_block[atomsymbol_1][atomsymbol_2]).to(self.torch_float_dtype)
-                    # H_block[atomtype_1][atomtype_2] = torch.einsum("ij,zsjk,kl->zsil", winger_D_1.T, H_block[atomtype_1][atomtype_2], winger_D_2)
-                    H_block[atomsymbol_1][atomsymbol_2] = torch.einsum("ij,zjk,kl->zil", winger_D_1.T, H_block[atomsymbol_1][atomsymbol_2], winger_D_2)
+                    H_block[atomsymbol_1][atomsymbol_2] = torch.einsum("ij,zsjk,kl->zsil", winger_D_1.T, H_block[atomsymbol_1][atomsymbol_2], winger_D_2)
                 if has_iHR and (len(iH_block[atomsymbol_1][atomsymbol_2]) != 0):
                     iH_block[atomsymbol_1][atomsymbol_2] = torch.stack(iH_block[atomsymbol_1][atomsymbol_2])
                     iH_block[atomsymbol_1][atomsymbol_2] = torch.einsum("ij,zsjk,kl->zsil", winger_D_1.T, iH_block[atomsymbol_1][atomsymbol_2], winger_D_2)
