@@ -154,7 +154,10 @@ class SO2Linear(torch.nn.Module):
 
                 elif m > 0:
                     _x = _x_new[:, self.mask_m_in[m]].reshape(sub_batch_size, self.so2_m_fc[m-1].c_in, 2).transpose(dim0=-1, dim1=-2)
-                    out[index_0, index_1[:, self.mask_m_out[m]]] += (self.so2_m_fc[m-1](_x)*(_w.unsqueeze(1))).reshape(sub_batch_size, -1)
+                    # SO2_m_linear returns (edge, +/-m, channel), while the
+                    # irrep mask stores each channel's (-m, +m) pair together.
+                    _y = self.so2_m_fc[m-1](_x) * _w.unsqueeze(1)
+                    out[index_0, index_1[:, self.mask_m_out[m]]] += _y.transpose(-1, -2).reshape(sub_batch_size, -1)
 
         elif self.edge_include_sc and (not self.shared_weights):
             for m in range(self.m_max+1):
