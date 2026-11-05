@@ -120,50 +120,53 @@ class Lossfunction(object):
     #     return MSEloss.item(), MAEloss.item()
 
     def ham_loss(self, H_block, AtomType_OrbitalSum, data):
-        num_atomtype = self.basicinfo.n_type
+        if not self.para.soc and self.para.magnetism == "nonmag":
+            return self.ham_loss_nonmag(H_block, data)
+        if not self.para.soc and self.para.magnetism == "collinear":
+            return self.ham_loss_collinear(H_block, data)
+        return self.ham_loss_complex(H_block, data)
+
+    def _ham_loss_from_differences(self, H_block, data, difference):
         unique_atomtypes = torch.unique(data.AtomType)
-        MSEloss, MAEloss = 0.0, 0.0
-        num_ele = 0
         abs_diff = []
-        for atomtype_1 in range(num_atomtype):
+        for atomtype_1 in range(self.basicinfo.n_type):
             if atomtype_1 not in unique_atomtypes:
                 continue
             atomsymbol_1 = self.basicinfo.AtomType_to_AtomSymbol[atomtype_1]
-            for atomtype_2 in range(num_atomtype):
+            for atomtype_2 in range(self.basicinfo.n_type):
                 if atomtype_2 not in unique_atomtypes:
                     continue
                 atomsymbol_2 = self.basicinfo.AtomType_to_AtomSymbol[atomtype_2]
                 h_pred = H_block[atomsymbol_1][atomsymbol_2]
                 h_ref = data.HR[atomsymbol_1][atomsymbol_2]
-
                 if h_ref.shape != h_pred.shape:
                     raise ValueError(
                         f"shape mismatch for {atomsymbol_1}/{atomsymbol_2}: "
                         f"ref {tuple(h_ref.shape)} vs pred {tuple(h_pred.shape)}"
                     )
-
-                if not self.para.spin:
-                    abs_diff.append(torch.abs(h_ref - h_pred).flatten())
-                else:
-                    if self.para.H_target == "real":
-                        abs_diff.append(torch.abs(h_ref.real - h_pred.real).flatten())
-                    elif self.para.H_target == "imag":
-                        abs_diff.append(torch.abs(h_ref.imag - h_pred.imag).flatten())
-                    elif self.para.H_target == "complete":
-                        abs_diff.append(torch.abs(h_ref - h_pred).flatten())
-                    # abs_real_diff = torch.abs(h_ref.real-h_pred.real).flatten()
-                    # abs_imag_diff = torch.abs(h_ref.imag-h_pred.imag).flatten()
-                    # abs_diff = torch.cat([abs_real_diff,abs_imag_diff])
-                    # MSEloss += torch.sum(torch.pow(abs_diff, 2))
-                    # MAEloss += torch.sum(abs_diff)
-                    # num_ele += abs_diff.numel()
+                abs_diff.append(difference(h_pred, h_ref, data, atomsymbol_1, atomsymbol_2).flatten())
 
         abs_diff = torch.cat(abs_diff)
-        MSEloss = torch.pow(abs_diff, 2).mean()
-        MAEloss = abs_diff.mean()
-        num_ele = abs_diff.numel()
-        return MSEloss, MAEloss, num_ele
-        # return MSEloss / num_ele, MAEloss / num_ele, num_ele
+        return abs_diff.square().mean(), abs_diff.mean(), abs_diff.numel()
+
+    def ham_loss_nonmag(self, H_block, data):
+        def difference(h_pred, h_ref, data, symbol_1, symbol_2):
+            return (h_pred[:, 0] - h_ref[:, 0]).abs()
+        return self._ham_loss_from_differences(H_block, data, difference)
+
+    def ham_loss_collinear(self, H_block, data):
+        def difference(h_pred, h_ref, data, symbol_1, symbol_2):
+            up = (h_pred[:, 0] - h_ref[:, 0]).abs()
+            down = (h_pred[:, 1] - h_ref[:, 1]).abs()
+            return torch.stack((up, down), dim=1)
+        return self._ham_loss_from_differences(H_block, data, difference)
+
+    def ham_loss_complex(self, H_block, data):
+        def difference(h_pred, h_ref, data, symbol_1, symbol_2):
+            if hasattr(data, "iHR"):
+                h_ref = torch.complex(h_ref, data.iHR[symbol_1][symbol_2])
+            return (h_pred - h_ref).abs()
+        return self._ham_loss_from_differences(H_block, data, difference)
 
     # def testloss_ham(self, H_block, AtomType_OrbitalSum, data):
     #     num_atomtype = self.basicinfo.n_type
@@ -188,50 +191,6 @@ class Lossfunction(object):
     #             num_ele += h_pred.numel()
 
     #     return MSEloss/num_ele, MAEloss/num_ele, num_ele
-
-    # import from GPUTB2
-    def trainloss_band_new3(self, eig, eig_ref,band_range): 
-        
-        pred = eig[..., band_range[0]:band_range[1]]
-        ref = eig_ref[..., band_range[0]:band_range[1]]
-        #num_kn = pred.numel()
-        
-        pred_sorted, _ = torch.sort(pred, dim=-1)
-        ref_sorted, _ = torch.sort(ref, dim=-1)
-        
-        loss_E = torch.nn.functional.mse_loss(pred_sorted, ref_sorted)
-        
-        grad_pred = torch.diff(pred, dim=-2) # 注意：这里用原始 pred，不 sort
-        curv_pred = torch.diff(grad_pred, dim=-2)
-        
-        loss_V = torch.mean(curv_pred**2)
-
-        
-        return  loss_E+self.para.weight_V*loss_V
-
-    def trainloss_band_new(self, eig, eig_ref,band_range): 
-        
-        pred = eig[..., band_range[0]:band_range[1]]
-        ref = eig_ref[..., band_range[0]:band_range[1]]
-        #num_kn = pred.numel()
-        
-        #pred_sorted, _ = torch.sort(pred, dim=-1)
-        #ref_sorted, _ = torch.sort(ref, dim=-1)
-        
-        loss_E = torch.nn.functional.mse_loss(pred, ref)
-
-        grad_pred = torch.diff(pred, dim=-2)
-        grad_ref = torch.diff(ref, dim=-2)
-
-        loss_V = torch.nn.functional.mse_loss(grad_pred, grad_ref)
-        
-        curv_pred = torch.diff(grad_pred, dim=-2)
-        curv_ref = torch.diff(grad_ref, dim=-2)
-        
-        loss_M = torch.nn.functional.mse_loss(curv_pred, curv_ref)
-
-    
-        return  loss_E+self.para.weight_V*loss_V+self.para.weight_M*loss_M
 
     def trainloss_band(self, eig, eig_ref, band_range, e_range):
         e = eig[...,band_range[0]:band_range[1]]

@@ -73,6 +73,7 @@ class Parameters(dict):
         super().__init__()
         self.update(self.set_default_parameters())
         self.update(para)
+        self.spin = 4 if self.soc or self.magnetism == "non-collinear" else (2 if self.magnetism == "collinear" else 1)
         if self["int_dtype"] == "int32":
             self.numpy_int_dtype = np.int32
             self.torch_int_dtype = torch.int32
@@ -109,7 +110,6 @@ class Parameters(dict):
         default_dict["trainset"] = None
         default_dict["testset"] = None
         default_dict["dft"] = None
-        default_dict["edge_include_sc"] = True
         # Data preprocess
         default_dict["using_CoordinateTransformation"] = True
         default_dict["k_gap"] = 1
@@ -167,7 +167,7 @@ class DataBase(ABC):
         self.AtomSymbol_to_AMList = basicinfo.AtomSymbol_to_AMList
 
     def find_neigbhor(self, frame: ase.Atoms, cutoff):
-        i, j, d, D, S = neighbor_list("ijdDS", a=frame, cutoff=cutoff, self_interaction=self.para.edge_include_sc)
+        i, j, d, D, S = neighbor_list("ijdDS", a=frame, cutoff=cutoff, self_interaction=True)
         edge_index = np.concatenate([i.reshape(1, -1), j.reshape(1, -1)], axis=0)
         edge_inverse = find_inverse_index(i, j, S, self.para.numpy_int_dtype)
         return [torch.from_numpy(ele).to(device=self.device, dtype=self.torch_float_dtype if ele.dtype.kind == "f" else self.torch_int_dtype) for ele in [i, j, d, D, S, edge_index, edge_inverse]]
@@ -210,7 +210,7 @@ class DataBase(ABC):
         return data
 
     def find_abacus_neighbor(self, frame: ase.Atoms, cutoff):
-        i, j, d, D, S = neighbor_list("ijdDS", a=frame, cutoff=cutoff, self_interaction=self.para.edge_include_sc)
+        i, j, d, D, S = neighbor_list("ijdDS", a=frame, cutoff=cutoff, self_interaction=True)
         phi_cutoff = self.para["orbital_cutoff"]
         projector_cutoff = self.para["nonlocal_cutoff"]
         symbols = frame.get_chemical_symbols()
@@ -309,11 +309,10 @@ class AbacusData(DataBase):
         if target == "ham" and self.para.using_CoordinateTransformation:
             for data in self.dataset:
                 data.wigner_D = self.get_wigner_Ds(self.para.L_max, data.D_hop[:, [1, 2, 0]])
-                if self.para.edge_include_sc:
-                    data.mask_edge = (data.d_hop > 1.0e-6)
-                    data.mask_sc = ~data.mask_edge
-                    for index in range(len(data.wigner_D)):
-                        data.wigner_D[index][data.mask_sc] = torch.eye(2*index+1, dtype=data.wigner_D[index].dtype, device=data.wigner_D[index].device).unsqueeze(0)
+                data.mask_edge = (data.d_hop > 1.0e-6)
+                data.mask_sc = ~data.mask_edge
+                for index in range(len(data.wigner_D)):
+                    data.wigner_D[index][data.mask_sc] = torch.eye(2*index+1, dtype=data.wigner_D[index].dtype, device=data.wigner_D[index].device).unsqueeze(0)
 
     def read_real(self, fid: TextIOWrapper):
         return np.fromstring(fid.readline(), sep=" ", dtype=self.numpy_float_dtype)
@@ -461,7 +460,7 @@ class AbacusData(DataBase):
     def abacus2hotham(self,
                       # matrix
                       HR: dict,
-                      iHR: dict,
+                      H1: dict,
                       SR: dict,
                       rR: dict,
                       # structure information
@@ -480,7 +479,7 @@ class AbacusData(DataBase):
         if len(HR) > 0:
             has_HR = True
             H_block = create_pair_dict(self.AtomSymbol_to_AtomType.keys())
-        if len(iHR) > 0:
+        if len(HR) > 0 and self.para.spin == 4 and torch.is_complex(next(iter(HR.values()))):
             has_iHR = True
             iH_block = create_pair_dict(self.AtomSymbol_to_AtomType.keys())
         if len(SR) > 0:
@@ -490,14 +489,7 @@ class AbacusData(DataBase):
             has_rR = True
             rR_block = {k: create_pair_dict(self.AtomSymbol_to_AtomType.keys()) for k in rR}
 
-        nspin = 1
-        if len(iHR):
-            nspin = 2
-        elif len(HR) or len(SR):
-            MR = HR if len(HR) else SR
-            csr_dim = list(MR.values())[0].shape[0]
-            if csr_dim == 2*TotalOrbital:
-                nspin = 4
+        nspin = self.para.spin
 
         for i in range(edge_index.shape[1]):
             s1, s2, s3 = cell_shift[i]
@@ -511,31 +503,35 @@ class AbacusData(DataBase):
             o1 = self.AtomType_OrbitalSum[atomtype_1]
             o2 = self.AtomType_OrbitalSum[atomtype_2]
             key_dft = (s1.item(), s2.item(), s3.item())
-            # key_hotham = (s1.item(), s2.item(), s3.item(), n1, n2)
+            if nspin == 4:
+                row_up = slice(2*start1, 2*start1+o1)
+                row_down = slice(2*start1+o1, 2*(start1+o1))
+                col_up = slice(2*start2, 2*start2+o2)
+                col_down = slice(2*start2+o2, 2*(start2+o2))
             if has_HR:
                 if key_dft in HR:
                     if nspin == 1:
-                        H_spin_o1_o2 = HR[key_dft][start1:start1+o1, start2:start2+o2][None, ...]
-                        H_block[atomsymbol_1][atomsymbol_2].append(H_spin_o1_o2)
-                    elif nspin > 1:
-                        raise NotImplementedError("Interface for nspin>1 is under development")
+                        h = HR[key_dft][start1:start1+o1, start2:start2+o2]
+                        channels = [h]
+                    elif nspin == 2:
+                        h_up = HR[key_dft][start1:start1+o1, start2:start2+o2]
+                        h_down = H1[key_dft][start1:start1+o1, start2:start2+o2] if key_dft in H1 else torch.zeros_like(h_up)
+                        channels = [h_up, h_down]
+                    else:
+                        h = HR[key_dft]
+                        channels = [h[row_up, col_up], h[row_up, col_down], h[row_down, col_up], h[row_down, col_down]]
+                    H_block[atomsymbol_1][atomsymbol_2].append(torch.stack([h.real for h in channels]))
+                    if has_iHR:
+                        iH_block[atomsymbol_1][atomsymbol_2].append(torch.stack([h.imag for h in channels]))
                 else:
-                    H_spin_o1_o2 = torch.zeros((1, o1, o2), dtype=self.torch_float_dtype)
+                    H_spin_o1_o2 = torch.zeros((nspin, o1, o2), dtype=self.torch_float_dtype)
                     H_block[atomsymbol_1][atomsymbol_2].append(H_spin_o1_o2)
-                    # raise KeyError(f"Can't find {key_dft} derived by ase in abacus's neighbor list")
-            if has_iHR:
-                if key_dft in iHR:
-                    if nspin == 1:
-                        iH_spin_o1_o2 = iHR[key_dft][start1:start1+o1, start2:start2+o2][None, ...]
-                        iH_block[atomsymbol_1][atomsymbol_2].append(iH_spin_o1_o2)
-                    elif nspin > 1:
-                        raise NotImplementedError("Interface for nspin>1 is under development")
-                else:
-                    raise KeyError(f"Can't find {key_dft} derived by ase in abacus's neighbor list")
+                    if has_iHR:
+                        iH_block[atomsymbol_1][atomsymbol_2].append(torch.zeros_like(H_spin_o1_o2))
             if has_SR:
                 if key_dft in SR:
-                    s_o1_o2 = SR[key_dft][start1:start1+o1, start2:start2+o2]
-                    S_block[atomsymbol_1][atomsymbol_2].append(s_o1_o2)
+                    s_o1_o2 = SR[key_dft][2*start1:2*(start1+o1):2, 2*start2:2*(start2+o2):2] if nspin == 4 else SR[key_dft][start1:start1+o1, start2:start2+o2]
+                    S_block[atomsymbol_1][atomsymbol_2].append(s_o1_o2.real)
                 else:
                     s_o1_o2 = torch.zeros((o1, o2), dtype=self.torch_float_dtype)
                     S_block[atomsymbol_1][atomsymbol_2].append(s_o1_o2)
@@ -543,8 +539,8 @@ class AbacusData(DataBase):
             if has_rR:
                 for direction in ["x", "y", "z"]:
                     if key_dft in rR[direction]:
-                        rr_o1_o2 = rR[direction][key_dft][start1:start1+o1, start2:start2+o2]
-                        rR_block[direction][atomsymbol_1][atomsymbol_2].append(rr_o1_o2)
+                        rr_o1_o2 = rR[direction][key_dft][row_up, col_up] if nspin == 4 else rR[direction][key_dft][start1:start1+o1, start2:start2+o2]
+                        rR_block[direction][atomsymbol_1][atomsymbol_2].append(rr_o1_o2.real)
                     else:
                         rr_o1_o2 = torch.zeros((o1, o2), dtype=self.torch_float_dtype)
                         rR_block[direction][atomsymbol_1][atomsymbol_2].append(rr_o1_o2)
@@ -633,7 +629,31 @@ class AbacusData(DataBase):
             paths.append((root, HS_file))
 
         for root, HS_file in tqdm(paths):
-            structure = read(os.path.join(root, "../model.xyz"))
+            xyz_path = os.path.join(root, "../model.xyz")
+            structure = read(xyz_path)
+
+            if self.para.magnetism != "nonmag":
+                with open(xyz_path, encoding="utf-8") as fid:
+                    fid.readline()
+                    properties = re.search(r'(?:^|\s)Properties=(?:"([^"]+)"|(\S+))', fid.readline())
+                columns = properties.group(1) or properties.group(2)
+                columns = columns.split(":")
+                mag_index = next(i for i, name in enumerate(columns[::3])
+                                 if name in ("magmoms", "magmom", "initial_magmoms"))
+                offset = sum(map(int, columns[2:3 * mag_index:3]))
+                count = int(columns[3 * mag_index + 2])
+                components = np.loadtxt(xyz_path, skiprows=2, max_rows=len(structure),
+                                        usecols=range(offset, offset + count), ndmin=2,
+                                        dtype=self.para.numpy_float_dtype)
+                if count == 1:
+                    components = np.column_stack((np.zeros((len(structure), 2), dtype=components.dtype), components))
+                length = np.linalg.norm(components, axis=1)
+                magmom = np.zeros((len(structure), 4), dtype=self.para.numpy_float_dtype)
+                active = length > 0
+                magmom[:, 0] = active
+                magmom[:, 1] = length
+                magmom[active, 2] = np.degrees(np.arccos(np.clip(components[active, 1] / length[active], -1, 1)))
+                magmom[active, 3] = np.degrees(np.arctan2(components[active, 0], components[active, 2])) % 360
 
             #fix for relaxed xyz to find correct neighbor
             structure.wrap(eps=1.0e-7)
@@ -652,7 +672,7 @@ class AbacusData(DataBase):
 
             # Hamiltonian (spin, key, orbit_0, oribit_1)
             # overlap     (key, orbit_0, oribit_1)
-            HR, iHR, SR, rR = self.get_HS(HS_file=HS_file, TotalOrbital=TotalOrbital)
+            HR, H1, SR, rR = self.get_HS(HS_file=HS_file, TotalOrbital=TotalOrbital)
 
             # 1.calculate and check neighbor list
             # 2.convert abacus's Hamiltonian and overlap to hotham's order
@@ -664,7 +684,7 @@ class AbacusData(DataBase):
             _, _, d, D, S, edge_index, edge_inverse = self.find_abacus_neighbor(frame=structure, cutoff=cutoff)
             unique_cell_shift, cell_shift_index = find_cell_shfit_index(S, self.para.numpy_int_dtype)
             HR, iHR, SR, rR = self.abacus2hotham(HR=HR,
-                                                 iHR=iHR,
+                                                 H1=H1,
                                                  SR=SR,
                                                  rR=rR,
                                                  AtomType=AtomType,
@@ -689,7 +709,7 @@ class AbacusData(DataBase):
                 unique_cell_shift=torch.from_numpy(unique_cell_shift).to(self.torch_int_dtype),
                 cell_shift_index=torch.from_numpy(cell_shift_index).to(self.torch_int_dtype)
             )
-            # data = {"AtomType": AtomType,
+                # data = {"AtomType": AtomType,
             #         "AtomType_OrbitalSum": self.AtomType_OrbitalSum,
             #         "offset": offset,
             #         "n_type": n_type,
@@ -710,6 +730,8 @@ class AbacusData(DataBase):
                 data["SR"] = numpy2tensor(SR, "cpu")
             if len(rR) != 0:
                 data["rR"] = numpy2tensor(rR, "cpu")
+            if self.para.magnetism != "nonmag":
+                data["magmom"] = numpy2tensor(magmom, "cpu")
             dataset.append(data)
         return dataset
 
@@ -725,11 +747,10 @@ class OpenmxData(DataBase):
         if target == "ham" and self.para.using_CoordinateTransformation:
             for data in self.dataset:
                 data.wigner_D = self.get_wigner_Ds(self.para.L_max, data.D_hop[:, [1, 2, 0]])
-                if self.para.edge_include_sc:
-                    data.mask_edge = (data.d_hop > 1.0e-6)
-                    data.mask_sc = ~data.mask_edge
-                    for index in range(len(data.wigner_D)):
-                        data.wigner_D[index][data.mask_sc] = torch.eye(2*index+1, dtype=data.wigner_D[index].dtype, device=data.wigner_D[index].device).unsqueeze(0)
+                data.mask_edge = (data.d_hop > 1.0e-6)
+                data.mask_sc = ~data.mask_edge
+                for index in range(len(data.wigner_D)):
+                    data.wigner_D[index][data.mask_sc] = torch.eye(2*index+1, dtype=data.wigner_D[index].dtype, device=data.wigner_D[index].device).unsqueeze(0)
 
     def get_Hamiltonian(self, fid: TextIOWrapper):
         HR = {}
@@ -782,16 +803,11 @@ class OpenmxData(DataBase):
 
     def get_HS(self, filename):
         HR, iHR, SR, rR = {}, {}, {}, {}
-        SpinP_switch = -1
         with open(filename, "r") as fid:
             line = fid.readline()
             while line:
-                # read SpinP_switch
-                if "SpinP_switch" in line:
-                    SpinP_switch = int(line.split("=")[1])
-
                 # read HR
-                elif ("Kohn-Sham Hamiltonian" in line) and ("iHks" not in line):
+                if ("Kohn-Sham Hamiltonian" in line) and ("iHks" not in line):
                     spin = int(line.split("=")[1])
                     HR[spin] = self.get_Hamiltonian(fid)
 
@@ -817,7 +833,6 @@ class OpenmxData(DataBase):
                     rR["z"] = self.get_rR(fid)
 
                 line = fid.readline()
-        # assert len(HR) == (SpinP_switch+1)
         return HR, iHR, SR, rR
 
     def get_wigner_D(self, order: Union[int, List[int]]):
@@ -880,10 +895,10 @@ class OpenmxData(DataBase):
             atomsymbol_2 = self.AtomType_to_AtomSymbol[atomtype_2]
             key = (s1.item(), s2.item(), s3.item(), n1.item(), n2.item())
             if has_HR:
-                H_spin_o1_o2 = np.stack([HR[spin][key] for spin in HR])
+                H_spin_o1_o2 = np.stack([HR[spin][key] for spin in range(self.para.spin)])
                 H_block[atomsymbol_1][atomsymbol_2].append(H_spin_o1_o2)
             if has_iHR:
-                iH_spin_o1_o2 = np.stack([iHR[spin][key] for spin in iHR])
+                iH_spin_o1_o2 = np.stack([iHR[spin][key] for spin in sorted(iHR)])
                 iH_block[atomsymbol_1][atomsymbol_2].append(iH_spin_o1_o2)
             if has_SR:
                 S_o1_o2 = SR[key]
@@ -967,7 +982,31 @@ class OpenmxData(DataBase):
             paths.append((root, HS_file))
 
         for root, HS_file in tqdm(paths):
-            structure = read(os.path.join(root, "model.xyz"))
+            xyz_path = os.path.join(root, "model.xyz")
+            structure = read(xyz_path)
+
+            if self.para.magnetism != "nonmag":
+                with open(xyz_path, encoding="utf-8") as fid:
+                    fid.readline()
+                    properties = re.search(r'(?:^|\s)Properties=(?:"([^"]+)"|(\S+))', fid.readline())
+                columns = properties.group(1) or properties.group(2)
+                columns = columns.split(":")
+                mag_index = next(i for i, name in enumerate(columns[::3])
+                                 if name in ("magmoms", "magmom", "initial_magmoms"))
+                offset = sum(map(int, columns[2:3 * mag_index:3]))
+                count = int(columns[3 * mag_index + 2])
+                components = np.loadtxt(xyz_path, skiprows=2, max_rows=len(structure),
+                                        usecols=range(offset, offset + count), ndmin=2,
+                                        dtype=self.para.numpy_float_dtype)
+                if count == 1:
+                    components = np.column_stack((np.zeros((len(structure), 2), dtype=components.dtype), components))
+                length = np.linalg.norm(components, axis=1)
+                magmom = np.zeros((len(structure), 4), dtype=self.para.numpy_float_dtype)
+                active = length > 0
+                magmom[:, 0] = active
+                magmom[:, 1] = length
+                magmom[active, 2] = np.degrees(np.arccos(np.clip(components[active, 1] / length[active], -1, 1)))
+                magmom[active, 3] = np.degrees(np.arctan2(components[active, 0], components[active, 2])) % 360
 
             # atom_type, n_type, lattice, position
             AtomType = np.array([self.AtomNumber_to_AtomType[atomnumber] for atomnumber in structure.numbers], dtype=self.para.numpy_int_dtype)
@@ -1017,7 +1056,7 @@ class OpenmxData(DataBase):
                 unique_cell_shift=torch.from_numpy(unique_cell_shift).to(self.torch_int_dtype),
                 cell_shift_index=torch.from_numpy(cell_shift_index).to(self.torch_int_dtype)
             )
-            # data = {"AtomType": AtomType,
+                # data = {"AtomType": AtomType,
             #         "AtomType_OrbitalSum": AtomType_OrbitalSum,
             #         "offset": offset,
             #         "n_type": n_type,
@@ -1038,6 +1077,8 @@ class OpenmxData(DataBase):
                 data["SR"] = numpy2tensor(SR, "cpu")
             if len(rR) != 0:
                 data["rR"] = numpy2tensor(rR, "cpu")
+            if self.para.magnetism != "nonmag":
+                data["magmom"] = numpy2tensor(magmom, "cpu")
             dataset.append(data)
         return dataset
 
@@ -1046,9 +1087,8 @@ if __name__ == "__main__":
         "int_dtype": "int64",
         "float_dtype": "float32",
         "trainset": "./",
-        # "testset": "./data/testset",
+        # "testset": "./testset",
 
-        # lcao require H data, orthTB require band data
         "dft": "openmx", #"openmx" or "abacus"
         "hamiltonian_type": "lcao", #"lcao" or "orthtb"
 
@@ -1058,8 +1098,12 @@ if __name__ == "__main__":
         "L_max": 7,
 
         # orthTB only
-        "rc": 6.4,  # Approximate neighbor cutoff; may be incorrect for ABACUS.
+        "rc": 6.4,  # Approximate neighbor cutoff, it may be incorrect for ABACUS.
         "k_gap": 1,
+
+        # lcao only
+        "magnetism": "nonmag", #"nonmag", "collinear", or "non-collinear"
+        "soc": False,
 
         # lcao only, ABACUS only, leave unchanged unless necessary
         "orbital_cutoff": {

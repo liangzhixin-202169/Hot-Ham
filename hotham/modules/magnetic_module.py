@@ -1,4 +1,5 @@
 import torch
+from contextlib import nullcontext
 import e3nn
 from torch_geometric.data import Data
 from typing import List
@@ -70,10 +71,10 @@ class LocalMAgEnv(torch.nn.Module):
             irreps_out=self.irreps_out,
             embedding_dim=self.para.basis_size,
             shared_weights=True,
-            edge_include_sc=para.edge_include_sc,
             irreps_sh=None,
             intdtype=self.para.torch_int_dtype,
             floatdtype=self.para.torch_float_dtype,
+            optimized=self.para.get("lcaoversion", 0) == 1,
         )
 
         self.lin_by_mag_lenght = OutputLinear(irreps_in=self.irreps_out, irreps_out=self.irreps_out, shared_weights=False, intdtype=self.para.torch_int_dtype)
@@ -96,16 +97,19 @@ class LocalMAgEnv(torch.nn.Module):
 
 
 class Self_Interaction_by_Edge(torch.nn.Module):
-    def __init__(self, irreps_node, irreps_edge, irreps_localmagenv, channel, para):
+    def __init__(self, irreps_node, irreps_edge, irreps_localmagenv, channel, para, embed_magnetism=True):
         super().__init__()
         self.irreps_node = irreps_node
         self.irreps_edge = irreps_edge
         self.irreps_localmagenv = irreps_localmagenv
         self.channel = channel
         self.para = para
+        self.embed_magnetism = embed_magnetism
         self.basis_size = self.para.basis_size
 
-        self.irreps_cat = self.irreps_edge + (self.irreps_node + self.irreps_node) + (self.irreps_localmagenv + self.irreps_localmagenv)
+        self.irreps_cat = self.irreps_edge + (self.irreps_node + self.irreps_node)
+        if self.embed_magnetism:
+            self.irreps_cat += self.irreps_localmagenv + self.irreps_localmagenv
         irreps_cat_sort = self.irreps_cat.sort()[0].simplify()
         irreps_out = TO3_Irreps(None)
         for mul1, ir1 in irreps_cat_sort:
@@ -113,7 +117,7 @@ class Self_Interaction_by_Edge(torch.nn.Module):
                 p = ir1.p * ir2.p
                 t_p = ir1.t_p * ir2.t_p
                 l3_max = ir1.l + ir2.l
-                l_list = [l3 for l3 in range(abs(ir1.l - ir2.l), min([l3_max, self.para.L_max + 1]) + 1) if (ir1.l + ir2.l + l3) % 2 == 0]
+                l_list = [l3 for l3 in range(abs(ir1.l - ir2.l), min([l3_max, self.para.L_max]) + 1) if (ir1.l + ir2.l + l3) % 2 == 0]
                 irreps_out += TO3_Irreps([(1, (l3, p, t_p)) for l3 in l_list])
         irreps_out = irreps_out.sort()[0].simplify()
         irreps_out = TO3_Irreps([(self.channel, ir) for _, ir in irreps_out])
@@ -124,15 +128,22 @@ class Self_Interaction_by_Edge(torch.nn.Module):
             irreps_in=self.irreps_out, irreps_out=self.irreps_out, channel=int(self.channel / 4), symmetrized=True, para=para
         )
         self.lin_post = OutputLinear(irreps_in=self.irreps_out, irreps_out=self.irreps_out, shared_weights=False, intdtype=self.para.torch_int_dtype)
-        self.weight_for_lin_post = e3nn.nn.FullyConnectedNet([self.basis_size * 3, 64, self.lin_post.weight_numel], torch.nn.functional.silu)
+        self.weight_for_lin_post = e3nn.nn.FullyConnectedNet([self.basis_size * (3 if self.embed_magnetism else 1), 64, self.lin_post.weight_numel], torch.nn.functional.silu)
 
     def forward(self, f_node, f_edge, local_mag_env, length_emb, mag_length_emb, data):
         edge_src, edge_dst = data.edge_index_hop
-        f_cat = torch.cat([f_edge, f_node[edge_src], f_node[edge_dst], local_mag_env[edge_src], local_mag_env[edge_dst]], dim=-1)
+        if self.embed_magnetism:
+            f_cat = torch.cat([f_edge, f_node[edge_src], f_node[edge_dst], local_mag_env[edge_src], local_mag_env[edge_dst]], dim=-1)
+        else:
+            f_cat = torch.cat([f_edge, f_node[edge_src], f_node[edge_dst]], dim=-1)
         f_cat = self.lin_prev(f_cat)
         f_edge = self.self_interaction(f_cat)
 
-        weight_for_lin = self.weight_for_lin_post(torch.cat([length_emb, mag_length_emb[edge_src], mag_length_emb[edge_dst]], dim=-1))
+        if self.embed_magnetism:
+            weight_input = torch.cat([length_emb, mag_length_emb[edge_src], mag_length_emb[edge_dst]], dim=-1)
+        else:
+            weight_input = length_emb
+        weight_for_lin = self.weight_for_lin_post(weight_input)
         f_edge = self.lin_post(x=f_edge, weights=weight_for_lin)
 
         return f_edge
@@ -150,30 +161,33 @@ class MagMessagePassing(torch.nn.Module):
         self.irreps_mids = irreps_mids
         self.irreps_sh = irreps_sh
         self.para = para
+        self.embed_magnetism = para.magnetism != "nonmag"
+        self.use_edge_interaction = para.self_interaction_by_edge
 
         self.lmax = max([self.irreps_node.lmax] + [i.lmax for i in self.irreps_mids])
-        self.mag_emb = MagEmbedding(lmax=self.lmax, basis_size=para.basis_size, mag_cutoff=para.mag_cutoff, para=para)
-
-        self.local_mag_env = LocalMAgEnv(irreps_node=self.mag_emb.mag_sh_emb_to3irreps, para=self.para)
+        if self.embed_magnetism:
+            self.mag_emb = MagEmbedding(lmax=self.lmax, basis_size=para.basis_size, mag_cutoff=para.mag_cutoff, para=para)
+            self.local_mag_env = LocalMAgEnv(irreps_node=self.mag_emb.mag_sh_emb_to3irreps, para=self.para)
 
         Conv_layers = torch.nn.ModuleList([])
-        if self.para.using_layernorm3:
-            LayerNorm_node, LayerNorm_edge = torch.nn.ModuleList([]), torch.nn.ModuleList([])
+        LayerNorm_node, LayerNorm_edge = torch.nn.ModuleList([]), torch.nn.ModuleList([])
         SelfInteractions_by_edge = torch.nn.ModuleList([])
-        if self.para.using_longrange:
+        if self.para.longrange:
             Longranges = torch.nn.ModuleList([])
         for layer_index in range(len(self.irreps_mids)):
             if layer_index == 0:
                 irreps_edge_prev = self.irreps_edge
-                selfinteraction_by_edge = Self_Interaction_by_Edge(
-                    irreps_node=irreps_node,
-                    irreps_edge=irreps_node,
-                    irreps_localmagenv=self.local_mag_env.irreps_out,
-                    channel=self.para["mid_channel"][layer_index],
-                    para=self.para,
-                )
-                SelfInteractions_by_edge.append(selfinteraction_by_edge)
-                irreps_edge_prev = selfinteraction_by_edge.irreps_out
+                if self.use_edge_interaction:
+                    selfinteraction_by_edge = Self_Interaction_by_Edge(
+                        irreps_node=irreps_node,
+                        irreps_edge=irreps_node,
+                        irreps_localmagenv=self.local_mag_env.irreps_out if self.embed_magnetism else TO3_Irreps(None),
+                        channel=self.para["mid_channel"][layer_index],
+                        para=self.para,
+                        embed_magnetism=self.embed_magnetism,
+                    )
+                    SelfInteractions_by_edge.append(selfinteraction_by_edge)
+                    irreps_edge_prev = selfinteraction_by_edge.irreps_out
                 generallocalconv = GeneralLocalConv(
                     irreps_node=self.irreps_node,
                     irreps_edge=irreps_edge_prev,
@@ -182,21 +196,23 @@ class MagMessagePassing(torch.nn.Module):
                     num_type=self.para.num_types,
                     basis_size=self.para.basis_size,
                     para=self.para,
-                    mag_length_emb_to3irreps=self.mag_emb.mag_length_emb_to3irreps,
-                    mag_sh_emb_to3irreps=self.mag_emb.mag_sh_emb_to3irreps,
-                    local_mag_env=self.local_mag_env.irreps_out,
+                    mag_length_emb_to3irreps=self.mag_emb.mag_length_emb_to3irreps if self.embed_magnetism else None,
+                    mag_sh_emb_to3irreps=self.mag_emb.mag_sh_emb_to3irreps if self.embed_magnetism else None,
+                    local_mag_env=self.local_mag_env.irreps_out if self.embed_magnetism else None,
                 )
             else:
                 irreps_edge_prev = Conv_layers[-1].local_irreps_out
-                selfinteraction_by_edge = Self_Interaction_by_Edge(
-                    irreps_node=Conv_layers[-1].local_irreps_out,
-                    irreps_edge=irreps_edge_prev,
-                    irreps_localmagenv=self.local_mag_env.irreps_out,
-                    channel=self.para["mid_channel"][layer_index],
-                    para=self.para,
-                )
-                SelfInteractions_by_edge.append(selfinteraction_by_edge)
-                irreps_edge_prev = selfinteraction_by_edge.irreps_out
+                if self.use_edge_interaction:
+                    selfinteraction_by_edge = Self_Interaction_by_Edge(
+                        irreps_node=Conv_layers[-1].local_irreps_out,
+                        irreps_edge=irreps_edge_prev,
+                        irreps_localmagenv=self.local_mag_env.irreps_out if self.embed_magnetism else TO3_Irreps(None),
+                        channel=self.para["mid_channel"][layer_index],
+                        para=self.para,
+                        embed_magnetism=self.embed_magnetism,
+                    )
+                    SelfInteractions_by_edge.append(selfinteraction_by_edge)
+                    irreps_edge_prev = selfinteraction_by_edge.irreps_out
                 generallocalconv = GeneralLocalConv(
                     irreps_node=Conv_layers[-1].local_irreps_out,
                     irreps_edge=irreps_edge_prev,
@@ -205,61 +221,68 @@ class MagMessagePassing(torch.nn.Module):
                     num_type=self.para.num_types,
                     basis_size=self.para.basis_size,
                     para=self.para,
-                    mag_length_emb_to3irreps=self.mag_emb.mag_length_emb_to3irreps,
-                    mag_sh_emb_to3irreps=self.mag_emb.mag_sh_emb_to3irreps,
-                    local_mag_env=self.local_mag_env.irreps_out,
+                    mag_length_emb_to3irreps=self.mag_emb.mag_length_emb_to3irreps if self.embed_magnetism else None,
+                    mag_sh_emb_to3irreps=self.mag_emb.mag_sh_emb_to3irreps if self.embed_magnetism else None,
+                    local_mag_env=self.local_mag_env.irreps_out if self.embed_magnetism else None,
                 )
             Conv_layers.append(generallocalconv)
 
-            if self.para.using_layernorm3:
-                LayerNorm_node.append(TO3LayerNormal(irreps_in=Conv_layers[layer_index].local_irreps_out, floatdtype=para.torch_float_dtype))
-                LayerNorm_edge.append(TO3LayerNormal(irreps_in=Conv_layers[layer_index].local_irreps_out, floatdtype=para.torch_float_dtype))
+            LayerNorm_node.append(TO3LayerNormal(irreps_in=Conv_layers[layer_index].local_irreps_out, floatdtype=para.torch_float_dtype, method=para.using_layernorm))
+            LayerNorm_edge.append(TO3LayerNormal(irreps_in=Conv_layers[layer_index].local_irreps_out, floatdtype=para.torch_float_dtype, method=para.using_layernorm))
 
-            if self.para.using_longrange:
+            if self.para.longrange:
                 longrange = LongRange(irreps_node=Conv_layers[layer_index].local_irreps_out, para=self.para)
                 Longranges.append(longrange)
 
-        assert (
-            self.irreps_mids[-1] == Conv_layers[-1].local_irreps_out
-        ), f"irreps_mids[-1] {self.irreps_mids[-1]} != Conv_layers[-1].local_irreps_out {Conv_layers[-1].local_irreps_out}\nmissing irreps: {Conv_layers[-1].missing_irreps}"
+        if self.embed_magnetism:
+            assert (
+                self.irreps_mids[-1] == Conv_layers[-1].local_irreps_out
+            ), f"irreps_mids[-1] {self.irreps_mids[-1]} != Conv_layers[-1].local_irreps_out {Conv_layers[-1].local_irreps_out}\nmissing irreps: {Conv_layers[-1].missing_irreps}"
         self.Conv_layers = Conv_layers
-        if self.para.using_layernorm3:
-            self.LayerNorm_node = LayerNorm_node
-            self.LayerNorm_edge = LayerNorm_edge
+        self.LayerNorm_node = LayerNorm_node
+        self.LayerNorm_edge = LayerNorm_edge
         self.SelfInteractions_by_edge = SelfInteractions_by_edge
-        if self.para.using_longrange:
+        if self.para.longrange:
             self.Longranges = Longranges
 
-        self.node_out = Conv_layers[-1].irreps_out
-        self.edge_out = Conv_layers[-1].irreps_out
+        self.node_out = Conv_layers[-1].local_irreps_out
+        self.edge_out = Conv_layers[-1].local_irreps_out
 
-    def forward(self, f_node, f_edge, edge_sh, node_emb, length_emb, data: Data):
+    def forward(self, f_node, f_edge, edge_sh, node_emb, length_emb, data: Data, profile=None, phase="train"):
         # AtomType = data.AtomType
         # edge_src, edge_dst = data.edge_index_hop
 
-        mag_sh_emb, mag_length_emb = self.mag_emb(data.magmom)
-        local_mag_env = self.local_mag_env(x=mag_sh_emb, length_emb=length_emb, mag_length_emb=mag_length_emb, data=data)
+        with profile.gpu_section(f"{phase}_mag_embedding") if profile else nullcontext():
+            if self.embed_magnetism:
+                mag_sh_emb, mag_length_emb = self.mag_emb(data.magmom)
+                local_mag_env = self.local_mag_env(x=mag_sh_emb, length_emb=length_emb, mag_length_emb=mag_length_emb, data=data)
+            else:
+                mag_sh_emb = mag_length_emb = local_mag_env = None
 
         for layer_index in range(len(self.irreps_mids)):
-            f_edge = self.SelfInteractions_by_edge[layer_index](
-                f_node=f_node, f_edge=f_edge, local_mag_env=local_mag_env, length_emb=length_emb, mag_length_emb=mag_length_emb, data=data
-            )
-            f_node, f_edge = self.Conv_layers[layer_index](
-                f_node=f_node,
-                f_edge=f_edge,
-                edge_sh=edge_sh,
-                node_emb=node_emb,
-                length_emb=length_emb,
-                data=data,
-                mag_length_emb=mag_length_emb,
-                mag_sh_emb=mag_sh_emb,
-                local_mag_env=local_mag_env,
-            )
-            if self.para.using_layernorm3:
+            if self.use_edge_interaction:
+                with profile.gpu_section(f"{phase}_layer{layer_index}_interaction") if profile else nullcontext():
+                    f_edge = self.SelfInteractions_by_edge[layer_index](
+                        f_node=f_node, f_edge=f_edge, local_mag_env=local_mag_env, length_emb=length_emb, mag_length_emb=mag_length_emb, data=data
+                    )
+            with profile.gpu_section(f"{phase}_layer{layer_index}_conv") if profile else nullcontext():
+                f_node, f_edge = self.Conv_layers[layer_index](
+                    f_node=f_node,
+                    f_edge=f_edge,
+                    edge_sh=edge_sh,
+                    node_emb=node_emb,
+                    length_emb=length_emb,
+                    data=data,
+                    mag_length_emb=mag_length_emb,
+                    mag_sh_emb=mag_sh_emb,
+                    local_mag_env=local_mag_env,
+                    profile=profile, prefix=f"{phase}_layer{layer_index}_conv",
+                )
+            with profile.gpu_section(f"{phase}_layer{layer_index}_norm") if profile else nullcontext():
                 f_node = self.LayerNorm_node[layer_index](f_node)
                 f_edge = self.LayerNorm_edge[layer_index](f_edge)
-            if self.para.using_longrange:
-                f_node_lr = self.Longranges[layer_index](f_node, data)
-                f_node = (f_node + f_node_lr) / (2**0.5)
+                if self.para.longrange:
+                    f_node_lr = self.Longranges[layer_index](f_node, data)
+                    f_node = (f_node + f_node_lr) / (2**0.5)
 
         return f_node, f_edge

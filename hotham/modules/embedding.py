@@ -31,7 +31,7 @@ class NodeEmbedding(torch.nn.Module):
 
 class EdgeEmbedding(torch.nn.Module):
     def __init__(self, basis_size: int, rc, out_feature: int = None,
-                 basis: str = "Gaussian"):
+                 basis: str = "Chebyshev"):
         super().__init__()
         self.basis_size = basis_size
         self.out_feature = out_feature
@@ -39,8 +39,6 @@ class EdgeEmbedding(torch.nn.Module):
             self.lenght_emb = Gaussian(rc, basis_size)
         elif basis == "Chebyshev":
             self.lenght_emb = Chebyshev(rc, basis_size)
-        else:
-            raise ValueError(f"Unknown basis in para: {basis}")
         self.out_dim = basis_size
 
     def forward(self, lenght: torch.tensor):
@@ -107,4 +105,4 @@ class Gaussian(torch.nn.Module):
         self.number = basis_size
 
     def forward(self, x):
-        return math.soft_one_hot_linspace(x=x, start=self.start, end=self.end, number=self.number, basis="gaussian", cutoff=False)
+        return math.soft_one_hot_linspace(x=x, start=self.start, end=self.end, number=self.number, basis="gaussian", cutoff=True)

@@ -37,7 +37,8 @@ class BaseModel(nn.Module):
         basicinfo = BasicInfo(orbit=para.orbit, device=self.device, intdtype=para.torch_int_dtype)
         self.num_atomtype = basicinfo.n_type
         self.symbols = self.para.orbit.keys()
-        self.spin = self.para.spin
+        self.magnetism = self.para.magnetism
+        self.soc = self.para.soc
         self.AtomSymbol_to_AtomNumber = basicinfo.AtomSymbol_to_AtomNumber
         self.AtomNumber_to_AtomSymbol = basicinfo.AtomNumber_to_AtomSymbol
         self.AtomNumber_to_AtomType = basicinfo.AtomNumber_to_AtomType
@@ -81,7 +82,7 @@ class BaseModel(nn.Module):
         #         cg[l1][l2] = torch.cat(cg[l1][l2], dim=-1).to(device=self.device)
         l_list = sorted(irs.ls)
         edge_irreps_output = o3.Irreps(None)
-        if self.spin:
+        if self.soc or self.magnetism == "non-collinear":
             dtype_cg = self.para.torch_complex_dtype
         else:
             dtype_cg = self.para.torch_float_dtype
@@ -95,7 +96,7 @@ class BaseModel(nn.Module):
                         cgs_l1_l2_l3s.append(o3.wigner_3j(l1, l2, l3, dtype=self.para.torch_float_dtype).to(dtype=dtype_cg))
                     self.register_buffer(cg_l1_l2_l3s_key, torch.cat(cgs_l1_l2_l3s, dim=-1))
 
-                if self.spin:
+                if self.soc or self.magnetism == "non-collinear":
                     # l3_list*spin0 -> l4_list
                     cg_l3s_spin0_l4s_key = f"cg_{l1}_{l2}_l3s_spin0_l4s"
                     if not hasattr(self, cg_l3s_spin0_l4s_key):
@@ -119,19 +120,23 @@ class BaseModel(nn.Module):
         output_slice = {}
         offset = 0
         time_parities = []
+        magnetic_slices = {}
         for index1, (mul1, (l1, p1)) in enumerate(irs):
             for index2, (mul2, (l2, p2)) in enumerate(irs):
                 assert mul1 == mul2 == 1
                 block_l1_l2 = o3.Irreps([(1, (l3, p1 * p2)) for l3 in range(abs(l1 - l2), l1 + l2 + 1)])
-                if not self.spin:
+                if not self.soc and self.magnetism in ("nonmag", "collinear"):
                     # l1*l2 -> l3_list
                     edge_irreps_output += block_l1_l2
                     # l3_list's slice in edge_irreps_output
                     slice_name = ((index1, irs[index1].ir), (index2, irs[index2].ir))
                     output_slice[slice_name] = ((l1, l2), (offset, offset + block_l1_l2.dim))
                     offset += block_l1_l2.dim
+                    if self.magnetism == "collinear":
+                        slice_name = ((index1, irs[index1].ir), (index2, irs[index2].ir), "magnetic")
+                        magnetic_slices[slice_name] = ((l1, l2), (offset - block_l1_l2.dim, offset))
 
-                if self.spin:
+                if self.soc or self.magnetism == "non-collinear":
                     # for spin==0
                     # l3_list*spin0 -> l4_list
                     edge_irreps_output += block_l1_l2
@@ -152,9 +157,16 @@ class BaseModel(nn.Module):
                         output_slice[slice_name] = ((l1, l2, l3), (offset, offset + block_l3_spin1.dim))
                         offset += block_l3_spin1.dim
 
+        if self.magnetism == "collinear" and not self.soc:
+            orbital_irreps = edge_irreps_output
+            for key, (angular_momenta, (start, end)) in magnetic_slices.items():
+                output_slice[key] = (angular_momenta, (start + offset, end + offset))
+            edge_irreps_output += orbital_irreps
+            self.edge_to3_irreps_output_even = TO3_Irreps([(mul, (l, p, 1)) for mul, (l, p) in orbital_irreps])
+            self.edge_to3_irreps_output_odd = TO3_Irreps([(mul, (l, p, -1)) for mul, (l, p) in orbital_irreps])
         self.edge_irreps_output = edge_irreps_output
         self.time_parities = time_parities
-        if self.spin:
+        if self.soc or self.magnetism == "non-collinear":
             self.edge_to3_irreps_output_real = TO3_Irreps(
                 [(mul, (l, p, t_p)) for (mul, (l, p)), t_p in zip(self.edge_irreps_output, self.time_parities)]
             )
@@ -177,19 +189,16 @@ class BaseModel(nn.Module):
         return x
 
     def DirectSum_to_DirectProduct(self, feature_node, feature_edge, data):
-        if self.para.edge_include_sc:
-            flag1 = data.edge_index_hop[0] == data.edge_index_hop[1]
-            flag2 = torch.norm(data.S_hop.to(self.para.torch_float_dtype), dim=-1) < 1.0e-6
-            selfconnect_index = torch.arange(feature_edge.shape[0], dtype=self.para.torch_int_dtype, device=feature_node.device)[flag1 * flag2]
-            selfconnect_node = data.edge_index_hop[0, selfconnect_index]
-            feature_edge[selfconnect_index] += feature_node[selfconnect_node]
-        else:
-            feature_edge = torch.cat([feature_edge, feature_node], dim=0)
+        flag1 = data.edge_index_hop[0] == data.edge_index_hop[1]
+        flag2 = torch.norm(data.S_hop.to(self.para.torch_float_dtype), dim=-1) < 1.0e-6
+        selfconnect_index = torch.arange(feature_edge.shape[0], dtype=self.para.torch_int_dtype, device=feature_node.device)[flag1 * flag2]
+        selfconnect_node = data.edge_index_hop[0, selfconnect_index]
+        feature_edge[selfconnect_index] += feature_node[selfconnect_node]
 
         H_l1l2_blocks = []
         # H_l1l2_blocks = {(index1,irs1.ir):{(index2,irs2.ir):None for index2,irs2 in enumerate(self.CommonOrbitalIrreps)} for index1,irs1 in enumerate(self.CommonOrbitalIrreps)}
         offset = 0
-        # if self.spin:
+        # if self.soc or self.magnetism == "non-collinear":
         #     n0, n1 = feature_edge.shape
         #     mid = n1 // 2
         #     feature_edge = feature_edge[:, :mid] + 1.0j * feature_edge[:, mid:]
@@ -199,13 +208,19 @@ class BaseModel(nn.Module):
             for index2, (mul2, (l2, p2)) in enumerate(self.CommonOrbitalIrreps):
                 ir2 = self.CommonOrbitalIrreps[index2].ir
 
-                if not self.spin:
+                if not self.soc and self.magnetism in ("nonmag", "collinear"):
                     # l3_list -> l1*l2
                     slice_key = ((index1, ir1), (index2, ir2))
                     _, (offset_start, offset_end) = self.output_slice[slice_key]
                     sub_feature_edge = feature_edge[:, offset_start:offset_end]
                     cg_l1_l2_l3s = getattr(self, f"cg_{l1}_{l2}_l3s")
                     block = torch.einsum("nk,ijk->nij", sub_feature_edge, cg_l1_l2_l3s)
+                    if self.magnetism == "collinear":
+                        slice_key = ((index1, ir1), (index2, ir2), "magnetic")
+                        _, (offset_start, offset_end) = self.output_slice[slice_key]
+                        magnetic_feature = feature_edge[:, offset_start:offset_end]
+                        magnetic_block = torch.einsum("nk,ijk->nij", magnetic_feature, cg_l1_l2_l3s)
+                        block = torch.stack([block + magnetic_block, block - magnetic_block], dim=1)
                     # H_l1l2_blocks[(index1, ir1)][(index2, ir2)] = block
                     H_l1l2_blocks.append(block)
                 else:
@@ -252,13 +267,7 @@ class BaseModel(nn.Module):
         hams = {s0: {s1: None for s1 in self.AtomSymbol_to_AtomType} for s0 in self.AtomSymbol_to_AtomType}
 
         num_atomtype = self.num_atomtype
-        if self.para.edge_include_sc:
-            n1, n2 = data.edge_index_hop
-        else:
-            n1, n2 = data.edge_index_hop
-            sc_node = torch.arange(data.num_nodes, dtype=n1.dtype, device=n1.device)
-            n1 = torch.cat([n1, sc_node])
-            n2 = torch.cat([n2, sc_node])
+        n1, n2 = data.edge_index_hop
         num_edge = len(n1)
 
         GraphEdgeIndex_to_BlockEdgeIndex = torch.zeros(num_edge, dtype=self.para.torch_int_dtype, device=self.device)
@@ -277,8 +286,10 @@ class BaseModel(nn.Module):
 
                 sum_orbit_1 = self.AtomSymbol_to_OrbitlSum[atomsymbol_1]
                 sum_orbit_2 = self.AtomSymbol_to_OrbitlSum[atomsymbol_2]
-                if not self.spin:
+                if self.magnetism == "nonmag" and not self.soc:
                     ham = torch.zeros((len(edge_index_seleced), sum_orbit_1, sum_orbit_2), device=self.device, dtype=self.para.torch_float_dtype)
+                elif self.magnetism == "collinear" and not self.soc:
+                    ham = torch.zeros((len(edge_index_seleced), 2, sum_orbit_1, sum_orbit_2), device=self.device, dtype=self.para.torch_float_dtype)
                 else:
                     ham = torch.zeros((len(edge_index_seleced), 4, sum_orbit_1, sum_orbit_2), device=self.device, dtype=self.para.torch_complex_dtype)
 
@@ -317,29 +328,15 @@ class BaseModel(nn.Module):
                 )
         # spin = True: (E, 4, n, m)
         # # spin=True: (E, 4, n, m) -> (E, 2n, 2m)
-        # if self.spin:
+        # if self.soc or self.magnetism == "non-collinear":
         #     for atomsymbol_1 in hams:
         #         for atomsymbol_2 in hams[atomsymbol_1]:
         #             hams[atomsymbol_1][atomsymbol_2] = self.spin_block_reshape(hams[atomsymbol_1][atomsymbol_2])
         # spin=False: (E, n, m) -> (E, 1, n, m)
-        if not self.spin:
+        if self.magnetism == "nonmag" and not self.soc:
             for symbol1 in hams:
                 for symbol2 in hams[symbol1]:
                     hams[symbol1][symbol2] = hams[symbol1][symbol2].unsqueeze(1)
-
-        # symmetrize matrix for (E,2n,2m)
-        # if (hasattr(data, "num_graphs")) and (data.num_graphs != 1):
-        #     edge_num = torch.tensor([data[i].num_edges for i in range(data.num_graphs)])
-        #     offset = torch.cat([edge_num.new_zeros(1), torch.cumsum(edge_num, dim=0)[:-1]])
-        #     if self.para.edge_include_sc:
-        #         edge_inverse = torch.cat([data[i].edge_inverse + offset[i] for i in range(data.num_graphs)])
-        #     else:
-        #         edge_inverse = torch.cat([data[i].edge_inverse + offset[i] for i in range(data.num_graphs)] + [sc_node])
-        # else:
-        #     if self.para.edge_include_sc:
-        #         edge_inverse = data.edge_inverse
-        #     else:
-        #         edge_inverse = torch.cat([data.edge_inverse, sc_node])
 
         # for atomtype_1 in range(self.num_atomtype):
         #     if atomtype_1 not in unique_atomtypes:
@@ -354,7 +351,7 @@ class BaseModel(nn.Module):
         #         edge_21 = edge_inverse[edge_12]
         #         edge_block21 = GraphEdgeIndex_to_BlockEdgeIndex[edge_21]
 
-        #         if not self.spin:
+        #         if self.magnetism == "nonmag" and not self.soc:
         #             hams[atomsymbol_1][atomsymbol_2] = 0.5 * (
         #                 hams[atomsymbol_1][atomsymbol_2] + hams[atomsymbol_2][atomsymbol_1][edge_block21].transpose(-2, -1)
         #             )
@@ -367,7 +364,7 @@ class BaseModel(nn.Module):
         #             edge_21 = edge_order[edge_21_mask]
         #             edge_12 = edge_inverse[edge_21]
         #             edge_block12 = GraphEdgeIndex_to_BlockEdgeIndex[edge_12]
-        #             if not self.spin:
+        #             if self.magnetism == "nonmag" and not self.soc:
         #                 hams[atomsymbol_2][atomsymbol_1] = hams[atomsymbol_1][atomsymbol_2][edge_block12].transpose(-2, -1)
         #             else:
         #                 hams[atomsymbol_2][atomsymbol_1] = hams[atomsymbol_1][atomsymbol_2][edge_block12].transpose(-2, -1).conj()
@@ -376,15 +373,9 @@ class BaseModel(nn.Module):
         if (hasattr(data, "num_graphs")) and (data.num_graphs != 1):
             edge_num = torch.tensor([data[i].num_edges for i in range(data.num_graphs)], dtype=self.para.torch_int_dtype, device=self.device)
             offset = torch.cat([edge_num.new_zeros(1), torch.cumsum(edge_num, dim=0)[:-1]])
-            if self.para.edge_include_sc:
-                edge_inverse = torch.cat([data[i].edge_inverse + offset[i] for i in range(data.num_graphs)])
-            else:
-                edge_inverse = torch.cat([data[i].edge_inverse + offset[i] for i in range(data.num_graphs)] + [sc_node])
+            edge_inverse = torch.cat([data[i].edge_inverse + offset[i] for i in range(data.num_graphs)])
         else:
-            if self.para.edge_include_sc:
-                edge_inverse = data.edge_inverse
-            else:
-                edge_inverse = torch.cat([data.edge_inverse, sc_node])
+            edge_inverse = data.edge_inverse
 
         for atomtype_1 in range(self.num_atomtype):
             if atomtype_1 not in unique_atomtypes:
@@ -399,7 +390,7 @@ class BaseModel(nn.Module):
                 edge_21 = edge_inverse[edge_12]
                 edge_block21 = GraphEdgeIndex_to_BlockEdgeIndex[edge_21]
 
-                if not self.spin:
+                if not self.soc and self.magnetism in ("nonmag", "collinear"):
                     hams[atomsymbol_1][atomsymbol_2] = 0.5 * (
                         hams[atomsymbol_1][atomsymbol_2] + hams[atomsymbol_2][atomsymbol_1][edge_block21].transpose(-2, -1)
                     )
@@ -412,7 +403,7 @@ class BaseModel(nn.Module):
                     edge_21 = edge_order[edge_21_mask]
                     edge_12 = edge_inverse[edge_21]
                     edge_block12 = GraphEdgeIndex_to_BlockEdgeIndex[edge_12]
-                    if not self.spin:
+                    if not self.soc and self.magnetism in ("nonmag", "collinear"):
                         hams[atomsymbol_2][atomsymbol_1] = hams[atomsymbol_1][atomsymbol_2][edge_block12].transpose(-2, -1)
                     else:
                         hams[atomsymbol_2][atomsymbol_1] = hams[atomsymbol_1][atomsymbol_2][edge_block12][:, [0, 2, 1, 3]].transpose(-2, -1).conj()

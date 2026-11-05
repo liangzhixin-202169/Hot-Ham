@@ -19,18 +19,18 @@ class DatasetPrepocess:
                 sampler = DistributedSampler(getattr(self, dataset), shuffle=shuffle, seed=para.seed, drop_last=False)
                 loader = DataLoader(
                     getattr(self, dataset),
-                    batch_size=para.batch_size,
+                    batch_size=1,
                     shuffle=False,
                     sampler=sampler,
                     num_workers=0,
                     pin_memory=(para.device.type == "cuda"),
                 )
             else:
-                loader = DataLoader(getattr(self, dataset), batch_size=para.batch_size, shuffle=shuffle, pin_memory=(para.device == "cuda"))
+                loader = DataLoader(getattr(self, dataset), batch_size=1, shuffle=shuffle, pin_memory=(para.device == "cuda"))
             loader_name = f"{dataset}_loader"
             setattr(self, loader_name, loader)
 
-        if para.fix_average and para.prediction == 0 and para.hamiltonian_type == "lcao":
+        if para.fix_average and para.prediction in (-1, 0) and para.hamiltonian_type == "lcao":
             num_nodes, num_edges = 0, 0
             for data in self.trainset_loader:
                 num_nodes += data.num_nodes

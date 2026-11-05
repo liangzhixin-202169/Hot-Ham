@@ -124,7 +124,11 @@ class Self_interaction(torch.nn.Module):
         self.lin_prev = OutputLinear(irreps_in=self.irreps_in, irreps_out=self.irreps_for_gaunt, intdtype=para.torch_int_dtype if para is not None else torch.int64)
         self.to3_gtp = TO3_GauntTensorProduct(irreps_in=irreps_for_gaunt, symmetrized=self.symmetrized, channel=channel, para=para)
         self.lin_post = OutputLinear(irreps_in=self.to3_gtp.irreps_out, irreps_out=self.irreps_out, intdtype=para.torch_int_dtype if para is not None else torch.int64)
-        self.layernormal = TO3LayerNormal(irreps_in=self.lin_post.irreps_out, floatdtype=para.torch_float_dtype if para is not None else torch.float32)
+        self.layernormal = TO3LayerNormal(
+            irreps_in=self.lin_post.irreps_out,
+            floatdtype=para.torch_float_dtype if para is not None else torch.float32,
+            method=para.using_layernorm if para is not None else 3,
+        )
 
     def forward(self, x):
         out = self.lin_prev(x)

@@ -36,8 +36,9 @@ class Electron():
 
         self.matrix_HR_pred = {}
         self.matrix_SR = {}
-        self.href_csr = self.para.get("H_ref_csr")
-        self.has_H_ref = self.href_csr is not None
+        self.spin = self.para["spin"]
+        assert self.spin in (1, 2, 4)
+        self.has_H_ref = self.para.get("H_ref_0_csr") is not None
         if self.has_H_ref:
             self.matrix_HR_ref = {}
 
@@ -85,10 +86,7 @@ class Electron():
         return kpoints, kweight
 
     def read_csr_HR_and_SR(self):
-        files = [("HR_pred", self.para["H_pred_csr"]), ("SR", self.para["S_csr"])]
-        if self.has_H_ref:
-            files.append(("HR_ref", self.href_csr))
-        for target, filepath in files:
+        def read_csr(filepath, hamiltonian):
             with open(filepath, "r") as f:
                 next(f)
                 dim = int(next(f).split(":")[-1].strip())
@@ -100,39 +98,60 @@ class Electron():
                 all_value = []
                 for icell in range(n_cell):
                     parts = next(f).strip().split()
-                    Rx, Ry, Rz = map(int, parts[:3])
+                    cell_shifts[icell] = list(map(int, parts[:3]))
                     nnz = int(parts[3])
-                    cell_shifts[icell] = [Rx, Ry, Rz]
                     if nnz > 0:
                         value_line = next(f).strip()
                         if value_line.startswith("("):
                             values = np.array([complex(*map(float, value.strip("()").split(","))) for value in value_line.split()], dtype=self.numpy_complex_dtype)
                         else:
-                            values = np.fromstring(value_line, sep=' ', dtype=self.numpy_float_dtype)
-                        col_ind = np.fromstring(next(f).strip(), sep=' ', dtype=self.numpy_int_dtype)
-                        row_ptr = np.fromstring(next(f).strip(), sep=' ', dtype=self.numpy_int_dtype)
+                            values = np.fromstring(value_line, sep=" ", dtype=self.numpy_float_dtype)
+                        col_ind = np.fromstring(next(f).strip(), sep=" ", dtype=self.numpy_int_dtype)
+                        row_ptr = np.fromstring(next(f).strip(), sep=" ", dtype=self.numpy_int_dtype)
                         counts = row_ptr[1:] - row_ptr[:-1]
                         rows = np.repeat(np.arange(dim, dtype=self.numpy_int_dtype), counts)
                         all_cell_idx.append(np.full(nnz, icell, dtype=self.numpy_int_dtype))
                         all_row.append(rows)
                         all_col.append(col_ind)
                         all_value.append(values)
-            assert len(all_value) > 0, f"Found nothing in {target} CSR."
-            cell_idx = np.concatenate(all_cell_idx)
-            row = np.concatenate(all_row)
-            col = np.concatenate(all_col)
+            assert all_value, f"Found nothing in {filepath} CSR."
             value = np.concatenate(all_value)
-            if target in ["HR_pred", "HR_ref"]:
-                value = (value * Rydberg).astype(self.numpy_complex_dtype if np.iscomplexobj(value) else self.numpy_float_dtype, copy=False)
-                # Rydberg to eV
-            target_dict = self.matrix_HR_pred if target == "HR_pred" else self.matrix_HR_ref if target == "HR_ref" else self.matrix_SR
-            target_dict['cell_shifts'] = cell_shifts
-            target_dict['cell_idx'] = cell_idx
-            target_dict['row'] = row
-            target_dict['col'] = col
-            target_dict['value'] = value
-            target_dict['dim'] = dim
-            target_dict['n_cell'] = n_cell
+            if hamiltonian:
+                value = value * Rydberg
+            return {
+                "cell_shifts": cell_shifts,
+                "cell_idx": np.concatenate(all_cell_idx),
+                "row": np.concatenate(all_row),
+                "col": np.concatenate(all_col),
+                "value": value,
+                "dim": dim,
+                "n_cell": n_cell,
+            }
+
+        def combine_spin(up, down):
+            assert up["dim"] == down["dim"]
+            return {
+                "cell_shifts": np.concatenate((up["cell_shifts"], down["cell_shifts"])),
+                "cell_idx": np.concatenate((up["cell_idx"], down["cell_idx"] + up["n_cell"])),
+                "row": np.concatenate((up["row"], down["row"] + up["dim"])),
+                "col": np.concatenate((up["col"], down["col"] + up["dim"])),
+                "value": np.concatenate((up["value"], down["value"])),
+                "dim": 2 * up["dim"],
+                "n_cell": up["n_cell"] + down["n_cell"],
+            }
+
+        self.matrix_HR_pred = read_csr(self.para["H_pred_0_csr"], True)
+        self.matrix_SR = read_csr(self.para["S_csr"], False)
+        if self.spin == 2:
+            self.matrix_HR_pred = combine_spin(self.matrix_HR_pred, read_csr(self.para["H_pred_1_csr"], True))
+            self.matrix_SR = combine_spin(self.matrix_SR, self.matrix_SR)
+        if self.has_H_ref:
+            self.matrix_HR_ref = read_csr(self.para["H_ref_0_csr"], True)
+            if self.spin == 2:
+                self.matrix_HR_ref = combine_spin(self.matrix_HR_ref, read_csr(self.para["H_ref_1_csr"], True))
+        assert self.matrix_HR_pred["dim"] == self.matrix_SR["dim"]
+        if self.has_H_ref:
+            assert self.matrix_HR_ref["dim"] == self.matrix_SR["dim"]
 
     def get_dense_Hk_and_Sk(self, k: np.ndarray, target: Literal["pred", "ref"]) -> tuple[np.ndarray, np.ndarray]:
         if target == "pred":
@@ -173,7 +192,7 @@ class Electron():
         eup = self.numpy_float_dtype(eigvals.max() + 2 * sigma)
         for _ in range(100):
             e_fermi = self.numpy_float_dtype(0.5 * (elw + eup))
-            n_electron = (0.5 * (1.0 if self.para["soc"] else 2.0) * kweight[:, None] * erfc((eigvals - e_fermi) / sigma)).sum()
+            n_electron = (0.5 * (2.0 if self.spin == 1 else 1.0) * kweight[:, None] * erfc((eigvals - e_fermi) / sigma)).sum()
             if abs(n_electron - valence_electrons) < 1.0e-10:
                 return e_fermi
             if n_electron < valence_electrons:
@@ -189,7 +208,7 @@ class Electron():
         shifted_eigvals = eigvals - self.numpy_float_dtype(efermi)
         delta_e = energy_range[:, None, None] - shifted_eigvals[None, :, :]
         gaussian = np.exp(-0.5 * (delta_e / sigma) ** 2)
-        prefactor = self.numpy_float_dtype((1.0 if self.para["soc"] else 2.0) / (np.sqrt(2.0 * np.pi) * sigma))
+        prefactor = self.numpy_float_dtype((2.0 if self.spin == 1 else 1.0) / (np.sqrt(2.0 * np.pi) * sigma))
         dos = prefactor * (gaussian * kweight[None, :, None]).sum(axis=(1, 2))
         return dos
 
@@ -331,10 +350,15 @@ if __name__ == "__main__":
         "structure": "./model.xyz",
         "valence_electrons": {"H": 1, "B": 3, "C": 4, "N": 5, "O": 6, "Mg": 10, "P": 5, "S": 6, "Ti": 12, "Nb": 13, "Mo": 14},
 
-        "soc": False,
-        "H_pred_csr": "./h_pred.csr",
-        # if H_ref_csr is omitted, will skip calculations for H_ref
-        "H_ref_csr": "./h_ref.csr",
+        "spin": 1,
+        # spin2 use 2 H_csr files, spin1 and spin4 use 1 H_csr file
+        "H_pred_0_csr": "./h_pred_0.csr",
+        "H_pred_1_csr": "./h_pred_1.csr",
+
+        # If H_ref is omitted, it will skip reference calculations.
+        "H_ref_0_csr": "./h_ref_0.csr",
+        "H_ref_1_csr": "./h_ref_1.csr",
+
         "S_csr": "./olp.csr",
 
         # para band

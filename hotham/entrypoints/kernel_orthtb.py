@@ -9,12 +9,52 @@ from .lossfun import Lossfunction
 from ..data.dataset_preprocess import DatasetPrepocess
 from .model_orthtb import Model
 import time
+from contextlib import nullcontext
 import matplotlib.pyplot as plt
 #import matplotlib
 #matplotlib.use('Agg')  # 禁用 GUI 渲染
 import numpy as np
 from ..utilities.soc import compute_soc_matrix_in_cubic_basis
 from ase.units import Rydberg,Bohr
+from collections import defaultdict
+from contextlib import contextmanager
+
+class EpochProfile:
+    def __init__(self, enabled, device):
+        self.enabled = enabled
+        self.device = device
+        self.times = defaultdict(float)
+        self.start = time.perf_counter()
+
+    def _synchronize(self):
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+
+    @contextmanager
+    def section(self, name):
+        if not self.enabled:
+            yield
+            return
+        self._synchronize()
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._synchronize()
+            self.times[name] += time.perf_counter() - start
+
+    def report(self, epoch, names, rank):
+        if not self.enabled:
+            return
+        self._synchronize()
+        total = time.perf_counter() - self.start
+        values = torch.tensor([total] + [self.times[name] for name in names], dtype=torch.float64)
+        if dist.is_initialized():
+            dist.all_reduce(values, op=dist.ReduceOp.MAX)
+        if rank == 0:
+            details = "  ".join(f"{name}:{value:.3f}s" for name, value in zip(names, values[1:].tolist()))
+            print(f"Profile epoch {epoch + 1} (rank max)  total:{values[0].item():.3f}s  {details}", flush=True)
+
 
 class Kernel(torch.nn.Module):
     def __init__(self, para: Parameters):
@@ -49,9 +89,9 @@ class Kernel(torch.nn.Module):
         model_path = self.para.get("init_from_checkpoint")
         saved_data = torch.load(model_path, map_location="cpu", weights_only=False) if model_path else None
         optimizer_state = saved_data.get("optimizer_state") if isinstance(saved_data, dict) else None
-        if model_path and self.para.prediction == 0 and (not isinstance(saved_data, dict) or "epoch" not in saved_data):
+        if model_path and self.para.prediction in (-1, 0) and (not isinstance(saved_data, dict) or "epoch" not in saved_data):
             raise ValueError("This OrthTB checkpoint has no epoch; its training epoch cannot be resumed.")
-        if model_path and optimizer_state is None and self.para.prediction == 0:
+        if model_path and optimizer_state is None and self.para.prediction in (-1, 0):
             raise ValueError("This OrthTB checkpoint has no optimizer state; its learning rate cannot be resumed.")
         initial_lr = optimizer_state["param_groups"][0]["lr"] if optimizer_state is not None else self.para.lr
         self.optimizer = getattr(torch.optim, para.optimizer)(self.model.parameters(),
@@ -66,7 +106,7 @@ class Kernel(torch.nn.Module):
         self.lossfunction = Lossfunction(para)
         self.HuberLoss=torch.nn.HuberLoss(delta=self.para.delta,reduction='mean')
         self.initialize_model(saved_data)
-        if self.para.prediction == 0:
+        if self.para.prediction in (-1, 0):
             ddp_options = {"find_unused_parameters": False, "broadcast_buffers": False}
             if self.device.type == "cuda":
                 ddp_options.update(device_ids=[self.para.local_rank], output_device=self.para.local_rank)
@@ -86,7 +126,7 @@ class Kernel(torch.nn.Module):
         return (values[0] / values[1]).item() if values[1].item() else float("nan")
 
     def _prediction_loader(self, loader):
-        return DataLoader(loader.dataset, batch_size=self.para.batch_size, shuffle=False)
+        return DataLoader(loader.dataset, batch_size=1, shuffle=False)
 
     def initialize_model(self, saved_data):
         if saved_data is None:
@@ -145,7 +185,7 @@ class Kernel(torch.nn.Module):
         }, model_path)
 
     def run(self):
-        if self.para.prediction == 0 :
+        if self.para.prediction in (-1, 0):
             self.train()
         elif self.para.rank == 0:
             if self.para.prediction == 1:
@@ -186,13 +226,14 @@ class Kernel(torch.nn.Module):
         return Mk#.contiguous()
 
 
-    def compute_H_pre(self,data,H_block):
+    def compute_H_pre(self,data,H_block,profile=None,phase=""):
         kpath_list = data.kpoints
         if len(kpath_list.shape) != 2:
             kpath_list = kpath_list.reshape(-1, 3)
-        Mk = self.matrixes_k(H_block, kpath_list,data)#.contiguous()
-        
-        eig = torch.linalg.eigvalsh(Mk)
+        with profile.section(f"{phase}_matrix") if profile else nullcontext():
+            Mk = self.matrixes_k(H_block, kpath_list,data)
+        with profile.section(f"{phase}_eigvalsh") if profile else nullcontext():
+            eig = torch.linalg.eigvalsh(Mk)
         return eig[None,...]
 
 
@@ -289,14 +330,15 @@ class Kernel(torch.nn.Module):
 
         return MK#.contiguous()
 
-    def compute_H_pre_soc(self,data,H_block,soc_val):
-        self.find_soc_block(data,soc_val)
+    def compute_H_pre_soc(self,data,H_block,soc_val,profile=None,phase=""):
         kpath_list = data.kpoints
         if len(kpath_list.shape) != 2:
             kpath_list = kpath_list.reshape(-1, 3)
-        Mk = self.matrixes_k_soc(H_block, kpath_list,data)
-        
-        eig = torch.linalg.eigvalsh(Mk)
+        with profile.section(f"{phase}_matrix") if profile else nullcontext():
+            self.find_soc_block(data,soc_val)
+            Mk = self.matrixes_k_soc(H_block, kpath_list,data)
+        with profile.section(f"{phase}_eigvalsh") if profile else nullcontext():
+            eig = torch.linalg.eigvalsh(Mk)
         return eig[None,...]
 
     def train(self):
@@ -304,55 +346,64 @@ class Kernel(torch.nn.Module):
         self.global_step=0
         for epoch in range(self.start_epoch, self.start_epoch+self.para.epoch):
             epoch_start = time.perf_counter()
+            profile = EpochProfile(self.para.prediction == -1, self.device)
             self.model.train()
             self.trainsetloader.sampler.set_epoch(epoch)
             scheduler_stats = torch.zeros(2, dtype=self.para.torch_float_dtype, device=self.device)
             train_stats = torch.zeros(3, dtype=self.para.torch_float_dtype, device=self.device)
             train_count = 0
 
-            for data in self.trainsetloader:
-                data.to(self.device)
-                self.optimizer.zero_grad()
-
+            train_iter = iter(self.trainsetloader)
+            while True:
+                with profile.section("train_data"):
+                    try:
+                        data = next(train_iter)
+                    except StopIteration:
+                        break
+                    data.to(self.device)
+                with profile.section("train_forward"):
+                    self.optimizer.zero_grad()
+                    if self.para.using_soc:
+                        H_block, self.GraphEdgeIndex_to_BlockEdgeIndex, soc_val = self.model(data)
+                    else:
+                        H_block, self.GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
                 if self.para.using_soc:
-                    H_block, self.GraphEdgeIndex_to_BlockEdgeIndex,soc_val = self.model(data)
-                    Eig_pre=self.compute_H_pre_soc(data, H_block,soc_val)
-                    Eig_ref=data.Eig_ref
+                    Eig_pre = self.compute_H_pre_soc(data, H_block, soc_val, profile, "train")
                 else:
-                    H_block, self.GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
-                    Eig_pre=self.compute_H_pre(data, H_block)
-                    Eig_ref=data.Eig_ref
+                    Eig_pre = self.compute_H_pre(data, H_block, profile, "train")
+                Eig_ref = data.Eig_ref
+                with profile.section("train_loss"):
+                    mse, mae = self.lossfunction.trainloss_band(Eig_pre, Eig_ref, self.para.band_range, self.para.e_range)
+                    train_loss = torch.sqrt(mse) + mae
+                    if self.para.using_dosloss:
+                        mse_dos, mae_dos = self.lossfunction.get_dos_loss(self.para.dos_sigma, 10000, Eig_pre[0], Eig_ref[0], self.para.band_range, self.device)
+                        train_loss += self.para.dos_weight * (torch.sqrt(mse_dos) + mae_dos)
+                with profile.section("train_backward"):
+                    train_loss.backward()
+                with profile.section("train_optimizer"):
+                    self.optimizer.step()
+                with profile.section("train_metrics"):
+                    scheduler_stats[0] += train_loss.detach() * data.num_graphs
+                    scheduler_stats[1] += data.num_graphs
+                    train_stats[0] += mse.detach() * data.num_graphs
+                    train_stats[1] += mae.detach() * data.num_graphs
+                    if self.para.using_dosloss:
+                        train_stats[2] += mae_dos.detach() * data.num_graphs
+                    train_count += data.num_graphs
 
-                mse, mae = self.lossfunction.trainloss_band(Eig_pre, Eig_ref, self.para.band_range, self.para.e_range)
-                #train_loss=self.lossfunction.trainloss_band_new(Eig_pre, Eig_ref,self.para.band_range)
-                #train_loss=self.HuberLoss(Eig_pre[...,self.para.band_range[0]:self.para.band_range[1]],Eig_ref[...,self.para.band_range[0]:self.para.band_range[1]])
-                train_loss=torch.sqrt(mse)+mae
-                if self.para.using_dosloss:
-                    mse_dos,mae_dos=self.lossfunction.get_dos_loss(self.para.dos_sigma,10000,Eig_pre[0],Eig_ref[0],self.para.band_range,self.device)
-                    train_loss+=self.para.dos_weight*(torch.sqrt(mse_dos)+mae_dos)
-
-
-                train_loss.backward()
-                self.optimizer.step()
-                scheduler_stats[0] += train_loss.detach() * data.num_graphs
-                scheduler_stats[1] += data.num_graphs
-                train_stats[0] += mse.detach() * data.num_graphs
-                train_stats[1] += mae.detach() * data.num_graphs
-                if self.para.using_dosloss:
-                    train_stats[2] += mae_dos.detach() * data.num_graphs
-                train_count += data.num_graphs
-
-            if self.para.lr_scheduler == "ExponentialLR":
-                self.lr_scheduler.step()
-            elif self.para.lr_scheduler == "ReduceLROnPlateau":
-                dist.all_reduce(scheduler_stats)
-                self.lr_scheduler.step((scheduler_stats[0] / scheduler_stats[1]).item())
+            with profile.section("scheduler"):
+                if self.para.lr_scheduler == "ExponentialLR":
+                    self.lr_scheduler.step()
+                elif self.para.lr_scheduler == "ReduceLROnPlateau":
+                    dist.all_reduce(scheduler_stats)
+                    self.lr_scheduler.step((scheduler_stats[0] / scheduler_stats[1]).item())
 
             current_lr = self.optimizer.param_groups[0]["lr"]
-            train_mse = self._global_average(train_stats[0], train_count)
-            train_mae = self._global_average(train_stats[1], train_count)
-            if self.para.using_dosloss:
-                train_dos_mae = self._global_average(train_stats[2], train_count)
+            with profile.section("epoch_metrics"):
+                train_mse = self._global_average(train_stats[0], train_count)
+                train_mae = self._global_average(train_stats[1], train_count)
+                if self.para.using_dosloss:
+                    train_dos_mae = self._global_average(train_stats[2], train_count)
 
             if self.para.rank == 0:
                 info = (f"Epoch:{epoch+1}  lr:{current_lr:.7f}"
@@ -364,42 +415,62 @@ class Kernel(torch.nn.Module):
             with torch.no_grad():
                 test_stats = torch.zeros(3, dtype=self.para.torch_float_dtype, device=self.device)
                 test_count = 0
-                for data in self.testsetloader:
-                    data.to(self.device)
+                test_iter = iter(self.testsetloader)
+                while True:
+                    with profile.section("test_data"):
+                        try:
+                            data = next(test_iter)
+                        except StopIteration:
+                            break
+                        data.to(self.device)
                     test_count += data.num_graphs
 
+                    with profile.section("test_forward"):
+                        if self.para.using_soc:
+                            H_block, self.GraphEdgeIndex_to_BlockEdgeIndex, soc_val = self.model(data)
+                        else:
+                            H_block, self.GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
                     if self.para.using_soc:
-                        H_block, self.GraphEdgeIndex_to_BlockEdgeIndex, soc_val = self.model(data)
-                        Eig_pre = self.compute_H_pre_soc(data, H_block, soc_val)
+                        Eig_pre = self.compute_H_pre_soc(data, H_block, soc_val, profile, "test")
                     else:
-                        H_block, self.GraphEdgeIndex_to_BlockEdgeIndex = self.model(data)
-                        Eig_pre = self.compute_H_pre(data, H_block)
-
-                    mse, mae = self.lossfunction.testloss_band(
-                        Eig_pre, data.Eig_ref, self.para.band_range, self.para.e_range
-                    )
-                    test_stats[0] += mse * data.num_graphs
-                    test_stats[1] += mae * data.num_graphs
-                    if self.para.using_dosloss:
-                        _, mae_dos = self.lossfunction.get_dos_loss(
-                            self.para.dos_sigma, 10000, Eig_pre[0], data.Eig_ref[0],
-                            self.para.band_range, self.device
+                        Eig_pre = self.compute_H_pre(data, H_block, profile, "test")
+                    with profile.section("test_loss"):
+                        mse, mae = self.lossfunction.testloss_band(
+                            Eig_pre, data.Eig_ref, self.para.band_range, self.para.e_range
                         )
-                        test_stats[2] += mae_dos * data.num_graphs
+                        if self.para.using_dosloss:
+                            _, mae_dos = self.lossfunction.get_dos_loss(
+                                self.para.dos_sigma, 10000, Eig_pre[0], data.Eig_ref[0],
+                                self.para.band_range, self.device
+                            )
+                    with profile.section("test_metrics"):
+                        test_stats[0] += mse * data.num_graphs
+                        test_stats[1] += mae * data.num_graphs
+                        if self.para.using_dosloss:
+                            test_stats[2] += mae_dos * data.num_graphs
 
-                mse_test = self._global_average(test_stats[0], test_count)
-                mae_test = self._global_average(test_stats[1], test_count)
-                if self.para.using_dosloss:
-                    mae_dos_test = self._global_average(test_stats[2], test_count)
+                if self.para.get("testset") is not None:
+                    with profile.section("epoch_metrics"):
+                        mse_test = self._global_average(test_stats[0], test_count)
+                        mae_test = self._global_average(test_stats[1], test_count)
+                        if self.para.using_dosloss:
+                            mae_dos_test = self._global_average(test_stats[2], test_count)
 
-            if self.para.rank == 0:
+            if self.para.rank == 0 and self.para.get("testset") is not None:
                 info += f"  Test_MSE:{mse_test:.7f}  Test_MAE:{mae_test:.7f}"
                 if self.para.using_dosloss:
                     info += f"  Test_MAE_DOS:{mae_dos_test:.7f}"
 
             is_last_epoch = epoch + 1 == self.start_epoch + self.para.epoch
             if (epoch + 1) % self.para.checkpoint_interval == 0 or is_last_epoch:
-                self.output_model(epoch)
+                with profile.section("checkpoint"):
+                    self.output_model(epoch)
+
+            profile.report(epoch, (
+                "train_data", "train_forward", "train_matrix", "train_eigvalsh", "train_loss", "train_backward",
+                "train_optimizer", "train_metrics", "test_data", "test_forward", "test_matrix", "test_eigvalsh",
+                "test_loss", "test_metrics", "epoch_metrics", "scheduler", "checkpoint",
+            ), self.para.rank)
 
             if self.para.rank == 0:
                 info += f"  Time:{time.perf_counter() - epoch_start:.3f}s"
@@ -409,12 +480,7 @@ class Kernel(torch.nn.Module):
     def topyatb(self):
         self.model.eval()
         model = self.raw_model
-        write = self.para.get("write")
-        allowed = {"h_pred", "olp", "rR", "opos"}
-        if not isinstance(write, (list, tuple)) or not write or any(
-            not isinstance(item, str) or item not in allowed for item in write
-        ):
-            raise ValueError("OrthTB prediction=2 requires write to be a nonempty list of h_pred, olp, rR, opos")
+        write = dict.__getitem__(self.para, "write")
         with torch.inference_mode():
             for batch_idx, data in enumerate(self._prediction_loader(self.trainsetloader)):
                 data.to(self.device)
@@ -424,8 +490,6 @@ class Kernel(torch.nn.Module):
                         self.find_soc_block(data, soc_val)
                     else:
                         H_block, _ = self.model(data)
-                if data.num_graphs != 1:
-                    raise ValueError("OrthTB CSR export requires batch_size=1")
                 prefix = "" if len(self.trainsetloader.dataset) == 1 else f"{batch_idx}_"
 
                 # ABACUS stores one CSR matrix per lattice shift R.  Accumulate
@@ -636,13 +700,26 @@ class Kernel(torch.nn.Module):
         return save_path
 
     def eval(self):
+        selected = [("Train", self.trainsetloader), ("Test", self.testsetloader)]
+        selected = [(name, loader) for name, loader in selected if self.para.get(name.lower() + "set") is not None]
+        if not selected:
+            print("No trainset or testset provided; evaluation skipped.")
+            return
         self.model.eval()
+        for name, loader in selected:
+            if not len(loader.dataset):
+                print(f"{name} dataset is empty; evaluation skipped.")
+                continue
+            print(f"{name}:")
+            self._eval_dataset(loader, name.lower())
+
+    def _eval_dataset(self, loader, name):
         with torch.no_grad():
             save_diff=[]
             save_ref=[]
             mae_all=0.0
             mae_dos_all=0.0
-            for data in self._prediction_loader(self.testsetloader):
+            for data in self._prediction_loader(loader):
                 data.to(self.device)
                 if self.para.using_soc:
                     H_block, self.GraphEdgeIndex_to_BlockEdgeIndex,soc_val = self.model(data)
@@ -684,7 +761,7 @@ class Kernel(torch.nn.Module):
                 #ax[1].set_ylim(7.5, 10.5)
 
 
-                save_directory = self.para.dump_sparseH
+                save_directory = os.path.join(self.para.dump_sparseH, name)
                 file_name = "figure.pdf"
                 saved_path = self.save_with_incremental_filename(save_directory, file_name)
 
@@ -701,9 +778,9 @@ class Kernel(torch.nn.Module):
                 save_ref.append(Eig_ref.to("cpu")[0].flatten())
                 save_diff.append((Eig_pre.to("cpu")[0]-Eig_ref.to("cpu")[0]).flatten())
 
-            print(f"MAE-average:  {mae_all/len(self.testsetloader):.5f}")
+            print(f"MAE-average:  {mae_all/len(loader):.5f}")
             if self.para.using_dosloss:
-                print(f"MAE-average_dos:  {mae_dos_all/len(self.testsetloader):.5f}")
+                print(f"MAE-average_dos:  {mae_dos_all/len(loader):.5f}")
 
 
             plt.clf()
@@ -726,5 +803,5 @@ class Kernel(torch.nn.Module):
             plt.autoscale(enable=True, axis='both')
             plt.xlim(-0.1, 0.1)  # 设置 x 轴范围
             plt.autoscale(enable=True, axis='y')  # 只自动调整 y 轴
-            plt.savefig("hist.pdf")
+            plt.savefig(os.path.join(save_directory, "hist.pdf"))
             

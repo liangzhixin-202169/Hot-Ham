@@ -50,8 +50,6 @@ class Model(nn.Module):
         self.N_average = torch.tensor(-1.0, dtype=para.torch_float_dtype)
 
 
-        assert len(self.Ce) == len(self.Co)
-
         self.layer_irreps = [MCST(self.lmax, 1, self.Ce[i])+MCST(self.lmax, -1, self.Co[i]) for i in range(len(self.Ce))]
         self.layer_irreps = [ir.remove_zero_multiplicities() for ir in self.layer_irreps]
         # restrict the last layer irreps
@@ -61,7 +59,8 @@ class Model(nn.Module):
         self.node_emb = NodeEmbedding(self.num_atomtype)
         self.edge_emb = EdgeEmbedding(self.basis_size,
                                       self.para.rc,
-                                      self.layer_irreps[0].num_irreps)
+                                      self.layer_irreps[0].num_irreps,
+                                      basis=self.para.basis)
 
         self.sh_emb = o3.SphericalHarmonics(irreps_out=o3.Irreps.spherical_harmonics(self.lmax), normalize=True)
 
@@ -224,9 +223,6 @@ class Model(nn.Module):
         # R_device = R_cpu.to(self.device)
         # D = self.node_endlinear.irreps_out.D_from_matrix(R_cpu)
         # data.wigner_D = [torch.einsum("ij,bjk->bik", o3.Irrep(l, -1).D_from_matrix(R_cpu).to(self.device), D) for l, D in zip(range(len(data.wigner_D)), data.wigner_D)]
-        # if self.para.edge_include_sc:
-        #     for l in range(len(data.wigner_D)):
-        #         data.wigner_D[l][data.mask_sc] = torch.eye(n=2*l+1, dtype=data.wigner_D[l].dtype, device=data.wigner_D[l].device).unsqueeze(0)
 
         # edge_vector_rotated = torch.einsum("ij,zj->zi", R_device, edge_vector)
         # sh_emb_rotated = self.sh_emb(edge_vector_rotated)

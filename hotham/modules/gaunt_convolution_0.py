@@ -1,4 +1,5 @@
 import math
+from contextlib import nullcontext
 import numpy as np
 import torch
 from torch.fft import fft, ifft, fft2, ifft2
@@ -197,7 +198,6 @@ class GauntTensorProduct_LCT(torch.nn.Module):
                  irreps_in2: Union[o3.Irreps, None],
                  irreps_out: Union[o3.Irreps, List[o3.Irreps]],
                  shared_weights=True,
-                 edge_include_sc=True,
                  floatdtype=torch.float32, **kwargs):
         super().__init__()
         self.floatdtype = floatdtype
@@ -234,7 +234,6 @@ class GauntTensorProduct_LCT(torch.nn.Module):
         self.irreps_in2 = irreps_in2
         self.irreps_out = irreps_out
         self.shared_weights = shared_weights
-        self.edge_include_sc = edge_include_sc
 
         self.lmax = lmax
         self.input1_channels = input1_channels
@@ -327,12 +326,9 @@ class GauntTensorProduct_LCT(torch.nn.Module):
             weightc = [weight[..., s].reshape((-1,)+self.wc_shape[i]) for i, s in enumerate(self.wc_slices)]
 
         image = torch.einsum("bci,bci,iuv->bcuv", feature.to(self.HCiuv.dtype), weight1.to(self.Ciuv.dtype), self.HCiuv)
-        if self.edge_include_sc:
-            kernel = self.RCiuv.new_zeros((weight2.shape[0], self.RCiuv.shape[1]))
-            kernel[mask_edge] = torch.einsum("i,bi,iu->bu", self.sh_z_edge, weight2[mask_edge].to(self.RCiuv.dtype), self.RCiuv)
-            kernel[mask_sc] = torch.einsum("i,bi,iu->bu", self.sh_z_sc, weight2[mask_sc].to(self.RCiuv.dtype), self.RCiuv)
-        else:
-            kernel = torch.einsum("i,bi,iu->bu", self.sh_z_edge, weight2.to(self.RCiuv.dtype), self.RCiuv)
+        kernel = self.RCiuv.new_zeros((weight2.shape[0], self.RCiuv.shape[1]))
+        kernel[mask_edge] = torch.einsum("i,bi,iu->bu", self.sh_z_edge, weight2[mask_edge].to(self.RCiuv.dtype), self.RCiuv)
+        kernel[mask_sc] = torch.einsum("i,bi,iu->bu", self.sh_z_sc, weight2[mask_sc].to(self.RCiuv.dtype), self.RCiuv)
 
         image_fft = fft(image, n=4*self.lmax+1, dim=-2)
         kernel_fft = fft(kernel, n=4*self.lmax+1, dim=-1)
@@ -383,7 +379,7 @@ class GauntConvolution(torch.nn.Module):
         self.basis_size = basis_size
         self.lmax = self.irreps_node.lmax
         self.nn_split_scale = para.nn_split_scale
-        self.using_layernorm2 = para.using_layernorm2
+        self.using_layernorm2 = True
         self.scatter = MyScatter(para.N_average)
         self.para = para
 
@@ -421,7 +417,7 @@ class GauntConvolution(torch.nn.Module):
                                           irreps_in2=self.irreps_sh,
                                           irreps_out=irreps_out.copy(),
                                           shared_weights=False,
-                                          edge_include_sc=para.edge_include_sc, floatdtype=para.torch_float_dtype)
+                                          floatdtype=para.torch_float_dtype)
         self.weight_gtp = e3nn.nn.FullyConnectedNet([self.basis_size,
                                                      hidden_neurons,
                                                      self.gtp.weight_numel],
@@ -434,47 +430,47 @@ class GauntConvolution(torch.nn.Module):
         self.lin2_node = o3.Linear(irreps_in=self.irreps_out, irreps_out=self.irreps_out)
         self.lin2_edge = o3.Linear(irreps_in=self.irreps_out, irreps_out=self.irreps_out)
 
-    def forward(self, f_node, f_edge, sh, node_emb, length_emb, data: Data):
+    def forward(self, f_node, f_edge, sh, node_emb, length_emb, data: Data, profile=None, phase="train", layer_index=0):
         edge_src, edge_dst = data.edge_index_hop
+        prefix = f"{phase}_gaunt{layer_index}"
 
         # self-connection
-        sc_node = self.sc_node(f_node, node_emb)
-        sc_edge = self.sc_edge(f_edge, torch.cat([node_emb[edge_src], node_emb[edge_dst], length_emb], dim=-1))
+        with profile.gpu_section(f"{prefix}_self_connection") if profile else nullcontext():
+            sc_node = self.sc_node(f_node, node_emb)
+            sc_edge = self.sc_edge(f_edge, torch.cat([node_emb[edge_src], node_emb[edge_dst], length_emb], dim=-1))
 
         # lin1(f_node)|              |->scatter->lin2_node
         #             |->e3tp->gate->|
         # lin1(f_edge)|              |->lin2_edge
-        f_node = self.lin1_node(f_node)
-        f_edge = self.lin1_edge(f_edge)
+        with profile.gpu_section(f"{prefix}_prepare") if profile else nullcontext():
+            f_node = self.lin1_node(f_node)
+            f_edge = self.lin1_edge(f_edge)
+            f_cat = torch.cat([torch.cat([f_node[:, s][edge_src], f_node[:, s][edge_dst], f_edge[:, s]], dim=-1) for s in self.irreps_node.slices()], dim=-1)
+            weight = self.weight_gtp(length_emb)
 
-        f_cat = torch.cat([torch.cat([f_node[:, s][edge_src], f_node[:, s][edge_dst], f_edge[:, s]], dim=-1) for s in self.irreps_node.slices()], dim=-1)
-        weight = self.weight_gtp(length_emb)
+        with profile.gpu_section(f"{prefix}_tensor_product") if profile else nullcontext():
+            if self.nn_split_scale > 1:
+                sub_batch_size = math.ceil(data.num_edges/self.nn_split_scale)
+                f_edge = [[] for _ in range(self.nn_split_scale)]
+                for index_sub_batch in range(self.nn_split_scale):
+                    if index_sub_batch == self.nn_split_scale-1:
+                        batch_slice = slice(sub_batch_size*index_sub_batch, data.num_edges)
+                    else:
+                        batch_slice = slice(sub_batch_size*index_sub_batch, sub_batch_size*(index_sub_batch+1))
+                    sub_f_edge = self.gtp(f_cat[batch_slice], sh[batch_slice], weight[batch_slice], [D[batch_slice] for D in data.wigner_D], data.mask_edge[batch_slice], data.mask_sc[batch_slice])
+                    f_edge[index_sub_batch] = sub_f_edge
+                f_edge = torch.cat(f_edge, dim=0)
+            else:
+                f_edge = self.gtp(f_cat, sh, weight, data.wigner_D, data.mask_edge, data.mask_sc)
 
-        if self.nn_split_scale > 1:
-            sub_batch_size = math.ceil(data.num_edges/self.nn_split_scale)
-            f_edge = [[] for _ in range(self.nn_split_scale)]
-            for index_sub_batch in range(self.nn_split_scale):
-                if index_sub_batch == self.nn_split_scale-1:
-                    batch_slice = slice(sub_batch_size*index_sub_batch, data.num_edges)
-                else:
-                    batch_slice = slice(sub_batch_size*index_sub_batch, sub_batch_size*(index_sub_batch+1))
-                sub_f_edge = self.gtp(f_cat[batch_slice], sh[batch_slice], weight[batch_slice], [D[batch_slice] for D in data.wigner_D], data.mask_edge[batch_slice], data.mask_sc[batch_slice])
-                f_edge[index_sub_batch] = sub_f_edge
-            f_edge = torch.cat(f_edge, dim=0)
-        else:
-            f_edge = self.gtp(f_cat, sh, weight, data.wigner_D, data.mask_edge, data.mask_sc)
-
-        if self.using_layernorm2:
-            f_edge = self.layernorm(f_edge)
-
-        f_edge = self.gate(f_edge)
-        f_node = self.scatter(f_edge, edge_dst, dim=0, dim_size=data.num_nodes)
-
-        f_node = self.lin2_node(f_node)
-        f_edge = self.lin2_edge(f_edge)
-
-        # add self-connection
-        f_node = f_node+sc_node
-        f_edge = f_edge+sc_edge
+        with profile.gpu_section(f"{prefix}_postprocess") if profile else nullcontext():
+            if self.using_layernorm2:
+                f_edge = self.layernorm(f_edge)
+            f_edge = self.gate(f_edge)
+            f_node = self.scatter(f_edge, edge_dst, dim=0, dim_size=data.num_nodes)
+            f_node = self.lin2_node(f_node)
+            f_edge = self.lin2_edge(f_edge)
+            f_node = f_node+sc_node
+            f_edge = f_edge+sc_edge
 
         return f_node, f_edge

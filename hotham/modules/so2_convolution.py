@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch_scatter import scatter
 from torch_geometric.data import Data
 import math
+from contextlib import nullcontext
 from typing import Optional
 from .common import MCST, Gate, MyScatter
 
@@ -65,13 +66,12 @@ class SO2_m_linear(torch.nn.Module):
 
 
 class SO2Linear(torch.nn.Module):
-    def __init__(self, irreps_in: o3.Irreps, irreps_sh: o3.Irreps, irreps_out: o3.Irreps, embedding_dim: int, shared_weights: bool, edge_include_sc, intdtype=torch.int64, floatdtype=torch.float32):
+    def __init__(self, irreps_in: o3.Irreps, irreps_sh: o3.Irreps, irreps_out: o3.Irreps, embedding_dim: int, shared_weights: bool, intdtype=torch.int64, floatdtype=torch.float32):
         super().__init__()
         self.irreps_in = irreps_in
         self.intdtype = intdtype
         self.irreps_sh = irreps_sh
         self.irreps_out = irreps_out
-        self.edge_include_sc = edge_include_sc
         self.shared_weights = shared_weights
         self.m_max = min(self.irreps_in.lmax, self.irreps_out.lmax)
 
@@ -141,7 +141,7 @@ class SO2Linear(torch.nn.Module):
         #     sh_new[..., s] = torch.einsum("zcj,zji->zci", sh_new[..., s].reshape(x.shape[0], mul, 2*l+1), wigner_D).reshape(batch_size, mul*(2*l+1))
 
         out = x.new_zeros((batch_size, self.irreps_out.dim))
-        if self.edge_include_sc and self.shared_weights:
+        if self.shared_weights:
             sub_batch_size = mask_edge.sum()
             index_0 = torch.arange(out.shape[0], dtype=self.intdtype, device=out.device).reshape(-1, 1)[mask_edge]
             index_1 = torch.arange(out.shape[1], dtype=self.intdtype, device=out.device).reshape(1, -1)
@@ -159,7 +159,7 @@ class SO2Linear(torch.nn.Module):
                     _y = self.so2_m_fc[m-1](_x) * _w.unsqueeze(1)
                     out[index_0, index_1[:, self.mask_m_out[m]]] += _y.transpose(-1, -2).reshape(sub_batch_size, -1)
 
-        elif self.edge_include_sc and (not self.shared_weights):
+        else:
             for m in range(self.m_max+1):
                 if m == 0:
                     _x = x_new[..., self.mask_m_in[m]]
@@ -169,27 +169,6 @@ class SO2Linear(torch.nn.Module):
                     _x = x_new[..., self.mask_m_in[m]]
                     out[mask_edge][..., self.mask_m_out[m]] += self.so2_m_fc[m-1](x=_x[mask_edge], emb=emb[mask_edge])
 
-        elif (not self.edge_include_sc) and self.shared_weights:
-            for m in range(self.m_max+1):
-                w = weight[..., self.weights_slices[m]]
-                if m == 0:
-                    _x = x_new[..., self.mask_m_in[m]]
-                    out[..., self.mask_m_out[m]] += self.fc_m0(_x)*w
-
-                elif m > 0:
-                    _x = x_new[..., self.mask_m_in[m]]
-                    out[..., self.mask_m_out[m]] += self.o2_m_fc[m-1](_x)*w
-
-        elif (not self.edge_include_sc) and (not self.shared_weights):
-            for m in range(self.m_max+1):
-                if m == 0:
-                    _x = x_new[..., self.mask_m_in[m]]
-                    out[..., self.mask_m_out[m]] += self.fc_m0(x=_x, emb=emb)
-
-                elif m > 0:
-                    _x = x_new[..., self.mask_m_in[m]]
-                    out[..., self.mask_m_out[m]] += self.o2_m_fc[m-1](x=_x, emb=emb)
-
         for (mul, (l, _)), s in zip(self.irreps_out, self.irreps_out.slices()):
             D_l = wigner_D[l]
             out[..., s] = torch.einsum("zcj,zij->zci", out[..., s].reshape(out.shape[0], mul, 2*l+1), D_l).reshape(batch_size, mul*(2*l+1))
@@ -198,25 +177,23 @@ class SO2Linear(torch.nn.Module):
 
 
 class SO2_wrap(torch.nn.Module):
-    def __init__(self, irreps_in: o3.Irreps, irreps_sh: o3.Irreps, irreps_out: o3.Irreps, embedding_dim: int, shared_weights=True, edge_include_sc=True, intdtype=torch.int64, floatdtype=torch.float32):
+    def __init__(self, irreps_in: o3.Irreps, irreps_sh: o3.Irreps, irreps_out: o3.Irreps, embedding_dim: int, shared_weights=True, intdtype=torch.int64, floatdtype=torch.float32):
         super().__init__()
 
         self.irreps_in = irreps_in
         self.irreps_out = irreps_out
         self.shared_weights = shared_weights
-        self.edge_include_sc = edge_include_sc
         self.lmax = self.irreps_in.lmax
         self.irreps_sh = o3.Irreps.spherical_harmonics(lmax=self.lmax)
 
-        self.so2_lin = SO2Linear(irreps_in, irreps_sh, irreps_out, embedding_dim, shared_weights, self.edge_include_sc, intdtype=intdtype, floatdtype=floatdtype)
+        self.so2_lin = SO2Linear(irreps_in, irreps_sh, irreps_out, embedding_dim, shared_weights, intdtype=intdtype, floatdtype=floatdtype)
 
-        if self.edge_include_sc:
-            self.sc_conv = o3.FullyConnectedTensorProduct(self.irreps_in, "1x0e", self.irreps_out, shared_weights=self.shared_weights)
-            if self.shared_weights:
-                self.weight_multi = e3nn.o3.ElementwiseTensorProduct(self.sc_conv.irreps_out, o3.Irreps([(self.sc_conv.irreps_out.num_irreps, (0, 1))]))
-                self.fc = e3nn.nn.FullyConnectedNet([embedding_dim, 64, self.weight_multi.irreps_out.num_irreps], torch.nn.functional.silu)
-            else:
-                self.fc = e3nn.nn.FullyConnectedNet([embedding_dim, 64, self.sc_conv.weight_numel], torch.nn.functional.silu)
+        self.sc_conv = o3.FullyConnectedTensorProduct(self.irreps_in, "1x0e", self.irreps_out, shared_weights=self.shared_weights)
+        if self.shared_weights:
+            self.weight_multi = e3nn.o3.ElementwiseTensorProduct(self.sc_conv.irreps_out, o3.Irreps([(self.sc_conv.irreps_out.num_irreps, (0, 1))]))
+            self.fc = e3nn.nn.FullyConnectedNet([embedding_dim, 64, self.weight_multi.irreps_out.num_irreps], torch.nn.functional.silu)
+        else:
+            self.fc = e3nn.nn.FullyConnectedNet([embedding_dim, 64, self.sc_conv.weight_numel], torch.nn.functional.silu)
 
         if self.shared_weights:
             self.weights = e3nn.nn.FullyConnectedNet([embedding_dim, 64, self.so2_lin.weight_numel], torch.nn.functional.silu)
@@ -226,14 +203,13 @@ class SO2_wrap(torch.nn.Module):
         out = self.so2_lin(x=x, sh=sh, emb=length_emb, wigner_D=wigner_D, mask_edge=mask_edge, mask_sc=mask_sc, weight=weights)
 
         # sh_sc will be projected to 0e only: sh=Constant
-        if self.edge_include_sc:
-            if self.shared_weights:
-                w = self.fc(length_emb[mask_sc])
-                _x = self.sc_conv(x[mask_sc], x.new_tensor([[0.28209479177387814]]))
-                out[mask_sc] += self.weight_multi(_x, w)
-            else:
-                w = self.fc(length_emb[mask_sc])
-                out[mask_sc] += self.sc_conv(x[mask_sc], x.new_tensor([[0.28209479177387814]]), w)
+        if self.shared_weights:
+            w = self.fc(length_emb[mask_sc])
+            _x = self.sc_conv(x[mask_sc], x.new_tensor([[0.28209479177387814]]))
+            out[mask_sc] += self.weight_multi(_x, w)
+        else:
+            w = self.fc(length_emb[mask_sc])
+            out[mask_sc] += self.sc_conv(x[mask_sc], x.new_tensor([[0.28209479177387814]]), w)
         return out
 
 
@@ -259,7 +235,7 @@ class SO2OutputLayer(torch.nn.Module):
         self.lin1_edge = o3.Linear(irreps_in=self.irreps_node, irreps_out=self.irreps_node)
         irreps_in = o3.Irreps([(mul*3, (l, p)) for mul, (l, p) in self.irreps_node])
 
-        self.so2tp = SO2_wrap(irreps_in, self.irreps_sh, self.irreps_out, self.basis_size, shared_weights=True, edge_include_sc=para.edge_include_sc, intdtype=para.torch_int_dtype, floatdtype=para.torch_float_dtype)
+        self.so2tp = SO2_wrap(irreps_in, self.irreps_sh, self.irreps_out, self.basis_size, shared_weights=True, intdtype=para.torch_int_dtype, floatdtype=para.torch_float_dtype)
         self.gate = Gate(irreps_in=self.so2tp.irreps_out)
 
         self.lin2_node = o3.Linear(irreps_in=self.so2tp.irreps_out, irreps_out=self.irreps_out)
@@ -267,47 +243,48 @@ class SO2OutputLayer(torch.nn.Module):
 
         assert self.sc_node.irreps_out == self.lin2_node.irreps_out
 
-    def forward(self, f_node, f_edge, sh, node_emb, length_emb, data: Data):
+    def forward(self, f_node, f_edge, sh, node_emb, length_emb, data: Data, profile=None, phase="train"):
         edge_src, edge_dst = data.edge_index_hop
 
         # self-connection
-        sc_node = self.sc_node(f_node, node_emb)
-        sc_edge = self.sc_edge(f_edge, torch.cat([node_emb[edge_src], node_emb[edge_dst], length_emb], dim=-1))
+        with profile.gpu_section(f"{phase}_so2_self_connection") if profile else nullcontext():
+            sc_node = self.sc_node(f_node, node_emb)
+            sc_edge = self.sc_edge(f_edge, torch.cat([node_emb[edge_src], node_emb[edge_dst], length_emb], dim=-1))
 
         # lin1(f_node)|               |scatter->lin2_node
         #             |->so2tp->gate->|
         # lin1(f_edge)|               |->lin2_edge
-        f_node = self.lin1_node(f_node)
-        f_edge = self.lin1_edge(f_edge)
+        with profile.gpu_section(f"{phase}_so2_prepare") if profile else nullcontext():
+            f_node = self.lin1_node(f_node)
+            f_edge = self.lin1_edge(f_edge)
+            f_cat = torch.cat([torch.cat([f_node[:, s][edge_src], f_node[:, s][edge_dst], f_edge[:, s]], dim=-1) for s in self.irreps_node.slices()], dim=-1)
+        with profile.gpu_section(f"{phase}_so2_tensor_product") if profile else nullcontext():
+            if self.nn_split_scale > 1:
+                sub_batch_size = math.ceil(data.num_edges/self.nn_split_scale)
+                f_edge = [[] for _ in range(self.nn_split_scale)]
+                for index_sub_batch in range(self.nn_split_scale):
+                    if index_sub_batch == self.nn_split_scale-1:
+                        batch_slice = slice(sub_batch_size*index_sub_batch, data.num_edges)
+                    else:
+                        batch_slice = slice(sub_batch_size*index_sub_batch, sub_batch_size*(index_sub_batch+1))
+                    sub_f_edge = self.so2tp(x=f_cat[batch_slice],
+                                            sh=sh[batch_slice],
+                                            length_emb=length_emb[batch_slice],
+                                            wigner_D=[D[batch_slice] for D in data.wigner_D],
+                                            mask_edge=data.mask_edge[batch_slice],
+                                            mask_sc=data.mask_sc[batch_slice])
+                    f_edge[index_sub_batch] = sub_f_edge
+                f_edge = torch.cat(f_edge, dim=0)
+            else:
+                f_edge = self.so2tp(x=f_cat, sh=sh, length_emb=length_emb, wigner_D=data.wigner_D, mask_edge=data.mask_edge, mask_sc=data.mask_sc)
 
-        f_cat = torch.cat([torch.cat([f_node[:, s][edge_src], f_node[:, s][edge_dst], f_edge[:, s]], dim=-1) for s in self.irreps_node.slices()], dim=-1)
-        if self.nn_split_scale > 1:
-            sub_batch_size = math.ceil(data.num_edges/self.nn_split_scale)
-            f_edge = [[] for _ in range(self.nn_split_scale)]
-            for index_sub_batch in range(self.nn_split_scale):
-                if index_sub_batch == self.nn_split_scale-1:
-                    batch_slice = slice(sub_batch_size*index_sub_batch, data.num_edges)
-                else:
-                    batch_slice = slice(sub_batch_size*index_sub_batch, sub_batch_size*(index_sub_batch+1))
-                sub_f_edge = self.so2tp(x=f_cat[batch_slice],
-                                        sh=sh[batch_slice],
-                                        length_emb=length_emb[batch_slice],
-                                        wigner_D=[D[batch_slice] for D in data.wigner_D],
-                                        mask_edge=data.mask_edge[batch_slice],
-                                        mask_sc=data.mask_sc[batch_slice])
-                f_edge[index_sub_batch] = sub_f_edge
-            f_edge = torch.cat(f_edge, dim=0)
-        else:
-            f_edge = self.so2tp(x=f_cat, sh=sh, length_emb=length_emb, wigner_D=data.wigner_D, mask_edge=data.mask_edge, mask_sc=data.mask_sc)
-
-        f_edge = self.gate(f_edge)
-        f_node = self.scatter(f_edge, edge_dst, dim=0, dim_size=data.num_nodes)
-        f_node = self.lin2_node(f_node)
-        f_edge = self.lin2_edge(f_edge)
-
-        # add self-connection
-        f_node = f_node+sc_node
-        f_edge = f_edge+sc_edge
+        with profile.gpu_section(f"{phase}_so2_postprocess") if profile else nullcontext():
+            f_edge = self.gate(f_edge)
+            f_node = self.scatter(f_edge, edge_dst, dim=0, dim_size=data.num_nodes)
+            f_node = self.lin2_node(f_node)
+            f_edge = self.lin2_edge(f_edge)
+            f_node = f_node+sc_node
+            f_edge = f_edge+sc_edge
 
         return f_node, f_edge
 

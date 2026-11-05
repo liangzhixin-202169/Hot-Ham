@@ -1,6 +1,5 @@
 import os
 import argparse
-import json5
 import yaml
 from time import time
 import torch
@@ -39,12 +38,10 @@ def main():
     args = parser.parse_args()
 
     assert os.path.exists(args.inputfile)
-    if args.inputfile.endswith(".json"):
-        with open(args.inputfile, "r", encoding='utf-8') as f:
-            input = json5.load(f)
-    elif args.inputfile.endswith(".yaml"):
-        with open(args.inputfile, "r", encoding='utf-8') as f:
-            input = yaml.safe_load(f)
+    if not args.inputfile.endswith(".yaml"):
+        parser.error("inputfile must be a .yaml file")
+    with open(args.inputfile, "r", encoding='utf-8') as f:
+        input = yaml.safe_load(f)
 
     # initialize model. read dataset
     para = Parameters(input)

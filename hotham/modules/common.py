@@ -255,10 +255,14 @@ class TO3LayerNormal(torch.nn.Module):
         irreps_in: TO3_Irreps,
         eps=1e-05,
         floatdtype=torch.float32,
+        method=3,
     ):
         super().__init__()
+        if method not in (2, 3):
+            raise ValueError("TO3LayerNormal method must be 2 or 3")
         self.irreps_in = irreps_in
         self.eps = eps
+        self.method = method
 
         self.weight = torch.nn.Parameter(torch.empty(irreps_in.num_irreps, dtype=floatdtype))
         self.bias = torch.nn.Parameter(torch.empty(irreps_in.num_irreps, dtype=floatdtype))
@@ -284,13 +288,12 @@ class TO3LayerNormal(torch.nn.Module):
             f = x[..., ir_slice].reshape(-1, mul, ir.dim)
             mean = scatter(f, batch, dim=0, reduce="mean").mean(dim=1, keepdim=True)
             f = f - mean[batch]
-            # if ir.is_scalar():
-            #     norm = scatter(f.abs().pow(2), batch, dim=0, reduce="mean").mean(dim=(1, 2), keepdim=True)
-            #     f = f / (norm.sqrt()[batch] + self.eps)
-            norm = scatter(f.abs().pow(2), batch, dim=0, reduce="mean").mean(dim=(1, 2), keepdim=True)
-            f = f / (norm + self.eps).sqrt()[batch]
-            # f = f / (norm.sqrt()[batch] + self.eps)
-            # f = f / norm.sqrt()[batch]
+            if self.method == 3 or ir.is_scalar():
+                norm = scatter(f.abs().pow(2), batch, dim=0, reduce="mean").mean(dim=(1, 2), keepdim=True)
+                if self.method == 2:
+                    f = f / (norm.sqrt()[batch] + self.eps)
+                else:
+                    f = f / (norm + self.eps).sqrt()[batch]
 
             w = self.weight[affine_slice[0] : affine_slice[1]]
             if ir.is_scalar():
@@ -314,10 +317,15 @@ class MyScatter(torch.nn.Module):
         # if fix_average:
         #     self.N_average = N_average
         self.N_average = N_average
+        self.use_fixed_average = bool(self.N_average.item() > 0)
+        self.register_load_state_dict_post_hook(self._refresh_average_mode)
+
+    def _refresh_average_mode(self, module, incompatible_keys):
+        module.use_fixed_average = bool(module.N_average.item() > 0)
 
     def forward(self, src: torch.Tensor, index: torch.Tensor, dim: int, dim_size: int):
         # if self.fix_average:
-        if self.N_average > 0:
+        if self.use_fixed_average:
             out = scatter(src, index, dim=dim, dim_size=dim_size, reduce="sum") / self.N_average
         else:
             out = scatter(src, index, dim=dim, dim_size=dim_size, reduce="mean")

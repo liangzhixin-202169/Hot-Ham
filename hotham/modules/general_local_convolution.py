@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch_scatter import scatter
 from torch_geometric.data import Data
 import math
+from contextlib import nullcontext
 from typing import Optional, Union
 from .common import MCST, Gate, TO3Gate, MyScatter, is_valid_path, Maximum_matching_irreps, assert_cg_rank_check
 from .te3nn.to3 import TO3_Irreps, TO3_Linear, TO3_FullyConnectedTensorProduct, TO3_ElementwiseTensorProduct
@@ -38,20 +39,23 @@ class EdgeFeatureInitialize(torch.nn.Module):
         self.mag_sh_emb_to3irreps = mag_sh_emb_to3irreps
         self.local_mag_env = local_mag_env
         self.para = para
+        self.embed_magnetism = para.magnetism != "nonmag"
         channel = irreps_node[0][0]
 
         # init local mag env
         embedding_dim = self.para.basis_size
         mag_lenght_irreps = TO3_Irreps([(embedding_dim, (0, 1, 1))])
         # irreps_in = mag_lenght_irreps + mag_lenght_irreps + self.mag_sh_emb_to3irreps + self.mag_sh_emb_to3irreps + self.irreps_sh
-        if self.local_mag_env is None:
+        if not self.embed_magnetism:
+            irreps_in = self.irreps_sh
+        elif self.local_mag_env is None:
             irreps_in = self.mag_sh_emb_to3irreps + self.mag_sh_emb_to3irreps + self.irreps_sh
         else:
             irreps_in = self.local_mag_env + self.local_mag_env + self.irreps_sh
         irreps_out = TO3_Irreps([(channel, (l, p, t_p)) for _, (l, p, t_p) in irreps_in.sort()[0].simplify()])
         self.lin1 = OutputLinear(irreps_in=irreps_in, irreps_out=irreps_out, shared_weights=False, intdtype=para.torch_int_dtype)
         # self.weights_for_lin1 = e3nn.nn.FullyConnectedNet([embedding_dim, 64, self.lin1.weight_numel], torch.nn.functional.silu)
-        self.weights_for_lin1 = e3nn.nn.FullyConnectedNet([embedding_dim * 3, 64, self.lin1.weight_numel], torch.nn.functional.silu)
+        self.weights_for_lin1 = e3nn.nn.FullyConnectedNet([embedding_dim * (3 if self.embed_magnetism else 1), 64, self.lin1.weight_numel], torch.nn.functional.silu)
         self.scatter = MyScatter(self.para.N_average)
 
         # pairwise feature
@@ -63,11 +67,16 @@ class EdgeFeatureInitialize(torch.nn.Module):
         edge_src, edge_dst = data.edge_index_hop
 
         # gather local env info
-        if self.local_mag_env is None:
+        if not self.embed_magnetism:
+            edge_info = edge_sh
+            weight_input = length_emb
+        elif self.local_mag_env is None:
             edge_info = torch.cat([mag_sh_emb[edge_src], mag_sh_emb[edge_dst], edge_sh], dim=-1)
+            weight_input = torch.cat([mag_length_emb[edge_src], mag_length_emb[edge_dst], length_emb], dim=-1)
         else:
             edge_info = torch.cat([local_mag_env[edge_src], local_mag_env[edge_dst], edge_sh], dim=-1)
-        weights_for_lin1 = self.weights_for_lin1(torch.cat([mag_length_emb[edge_src], mag_length_emb[edge_dst], length_emb], dim=-1))
+            weight_input = torch.cat([mag_length_emb[edge_src], mag_length_emb[edge_dst], length_emb], dim=-1)
+        weights_for_lin1 = self.weights_for_lin1(weight_input)
         edge_info = self.lin1(edge_info, weights_for_lin1)
         local_mag_env_by_scatter = self.scatter(edge_info, edge_dst, dim=0, dim_size=data.num_nodes)
 
@@ -99,7 +108,7 @@ class TO2_0_linear(torch.nn.Module):
         self.c_out = irreps_out.num_irreps
 
         self.lmax = max([self.irreps_in.lmax, self.irreps_out.lmax])
-        self.irreps_sh = TO3_Irreps.spherical_harmonics(lmax=self.lmax * 2, p=-1, t_p=1)
+        self.irreps_sh = TO3_Irreps.spherical_harmonics(lmax=self.lmax, p=-1, t_p=1)
 
         # define weight_mask
         weight_mask = torch.zeros((self.irreps_in.num_irreps, self.irreps_out.num_irreps), dtype=torch.bool)
@@ -194,7 +203,7 @@ class TO2_m_linear(torch.nn.Module):
         self.c_out = irreps_out.num_irreps
 
         self.lmax = max([self.irreps_in.lmax, self.irreps_out.lmax])
-        self.irreps_sh = TO3_Irreps.spherical_harmonics(lmax=self.lmax * 2, p=-1, t_p=1)
+        self.irreps_sh = TO3_Irreps.spherical_harmonics(lmax=self.lmax, p=-1, t_p=1)
         irreps_sh_even = TO3_Irreps([irs for irs in self.irreps_sh if irs.ir.p == 1])
         irreps_sh_odd = TO3_Irreps([irs for irs in self.irreps_sh if irs.ir.p == -1])
 
@@ -280,13 +289,12 @@ class TO2_m_linear(torch.nn.Module):
 
 class TO2Linear(torch.nn.Module):
     def __init__(
-        self, irreps_in: TO3_Irreps, irreps_out: TO3_Irreps, embedding_dim: int, shared_weights: bool, edge_include_sc, irreps_sh: TO3_Irreps = None, intdtype=torch.int64, floatdtype=torch.float32
+        self, irreps_in: TO3_Irreps, irreps_out: TO3_Irreps, embedding_dim: int, shared_weights: bool, irreps_sh: TO3_Irreps = None, intdtype=torch.int64, floatdtype=torch.float32
     ):
         super().__init__()
         self.irreps_in = irreps_in
         self.irreps_sh = irreps_sh
         self.irreps_out = irreps_out
-        self.edge_include_sc = edge_include_sc
         self.intdtype = intdtype
         self.shared_weights = shared_weights
         self.m_max = min(self.irreps_in.lmax, self.irreps_out.lmax)
@@ -344,8 +352,7 @@ class TO2Linear(torch.nn.Module):
             x_new[..., idx] = torch.einsum("zcj,zji->zci", x[..., idx].reshape(batch_size, -1, 2 * l + 1), D_l).reshape(batch_size, -1)
 
         out = x.new_zeros((batch_size, self.irreps_out.dim))
-        if self.edge_include_sc and self.shared_weights:
-            sub_batch_size = int(mask_edge.sum().item())
+        if self.shared_weights:
             index_0 = torch.arange(out.shape[0], dtype=self.intdtype, device=out.device).reshape(-1, 1)[mask_edge]
             # index_1 = torch.arange(out.shape[1], device=out.device).reshape(1, -1)
             _x_new = x_new[mask_edge]
@@ -365,7 +372,7 @@ class TO2Linear(torch.nn.Module):
                     _x = _x_new[:, input_m_idx].reshape(n, -1, 2)
                     _y = to2_lin(_x)
                     _y = _y * (_w.unsqueeze(-1))
-                    out[index_0, output_m_idx] = _y.reshape(sub_batch_size, -1)
+                    out[index_0, output_m_idx] = _y.reshape(_y.shape[0], -1)
                 # for m in range(self.m_max + 1):
                 #     _w = _weight[:, self.weights_slices[m] : self.weights_slices[m + 1]]
                 #     if m == 0:
@@ -378,8 +385,8 @@ class TO2Linear(torch.nn.Module):
                 #         _y = self.to2_m_fcs[m](_x) * (_w.unsqueeze(-1))
                 #         out[index_0, index_1[:, self.mask_m_out[m]]] = _y.reshape(sub_batch_size, -1)
 
-        elif self.edge_include_sc and (not self.shared_weights):
-            raise NotImplementedError("Not implemented yet for edge_include_sc=True and shared_weights=False")
+        else:
+            raise NotImplementedError("Not implemented yet for shared_weights=False")
             # for m in range(self.m_max + 1):
             #     if m == 0:
             #         _x = x_new[..., self.mask_m_in[m]]
@@ -388,29 +395,6 @@ class TO2Linear(torch.nn.Module):
             #     elif m > 0:
             #         _x = x_new[..., self.mask_m_in[m]]
             #         out[index_0, index_1[:, self.mask_m_out[m]]] = self.to2_m_fcs[m](x=_x[mask_edge], length_emb=length_emb[mask_edge])
-
-        elif (not self.edge_include_sc) and self.shared_weights:
-            raise NotImplementedError("Not implemented yet for edge_include_sc=False and shared_weights=True")
-            # for m in range(self.m_max + 1):
-            #     w = weight[..., self.weights_slices[m] : self.weights_slices[m + 1]]
-            #     if m == 0:
-            #         _x = x_new[..., self.mask_m_in[m]]
-            #         out[index_0, index_1[:, self.mask_m_out[m]]] = self.to2_m_fcs[m](_x) * w
-
-            #     elif m > 0:
-            #         _x = x_new[..., self.mask_m_in[m]]
-            #         out[index_0, index_1[:, self.mask_m_out[m]]] = self.to2_m_fcs[m](_x) * w
-
-        elif (not self.edge_include_sc) and (not self.shared_weights):
-            raise NotImplementedError("Not implemented yet for edge_include_sc=False and shared_weights=False")
-            # for m in range(self.m_max + 1):
-            #     if m == 0:
-            #         _x = x_new[..., self.mask_m_in[m]]
-            #         out[index_0, index_1[:, self.mask_m_out[m]]] = self.to2_m_fcs[m](x=_x, length_emb=length_emb)
-
-            #     elif m > 0:
-            #         _x = x_new[..., self.mask_m_in[m]]
-            #         out[index_0, index_1[:, self.mask_m_out[m]]] = self.to2_m_fcs[m](x=_x, length_emb=length_emb)
 
         # l==0 component is invariant under rotation
         for l in range(1, self.irreps_out.lmax + 1):
@@ -428,58 +412,69 @@ class TO2_wrap(torch.nn.Module):
         irreps_out: TO3_Irreps,
         embedding_dim: int,
         shared_weights=True,
-        edge_include_sc=True,
         irreps_sh: TO3_Irreps = None,
         intdtype=torch.int64,
         floatdtype=torch.float32,
+        optimized=False,
     ):
         super().__init__()
 
         self.irreps_in = irreps_in
         self.irreps_out = irreps_out
         self.shared_weights = shared_weights
-        self.edge_include_sc = edge_include_sc
         self.lmax = self.irreps_in.lmax
         self.irreps_sh = irreps_sh
 
-        self.to2_lin = TO2Linear(
+        to2_class = TO2Linear
+        if optimized:
+            from .general_local_convolution_2 import OptimizedTO2Linear
+            to2_class = OptimizedTO2Linear
+        self.to2_lin = to2_class(
             irreps_in=irreps_in,
             irreps_out=irreps_out,
             embedding_dim=embedding_dim,
             shared_weights=shared_weights,
-            edge_include_sc=self.edge_include_sc,
             intdtype=intdtype, floatdtype=floatdtype,
         )
 
-        if self.edge_include_sc:
-            self.sc_conv = TO3_FullyConnectedTensorProduct(self.irreps_in, "1x0ee", self.irreps_out, shared_weights=self.shared_weights)
-            if self.shared_weights:
-                self.weight_multi = TO3_ElementwiseTensorProduct(
-                    self.sc_conv.to3_irreps_out, TO3_Irreps([(self.sc_conv.irreps_out.num_irreps, (0, 1, 1))])
-                )
-                self.fc = e3nn.nn.FullyConnectedNet([embedding_dim, 64, self.weight_multi.irreps_out.num_irreps], torch.nn.functional.silu)
-            else:
-                self.fc = e3nn.nn.FullyConnectedNet([embedding_dim, 64, self.sc_conv.weight_numel], torch.nn.functional.silu)
+        self.sc_conv = TO3_FullyConnectedTensorProduct(self.irreps_in, "1x0ee", self.irreps_out, shared_weights=self.shared_weights)
+        if self.shared_weights:
+            self.weight_multi = TO3_ElementwiseTensorProduct(
+                self.sc_conv.to3_irreps_out, TO3_Irreps([(self.sc_conv.irreps_out.num_irreps, (0, 1, 1))])
+            )
+            self.fc = e3nn.nn.FullyConnectedNet([embedding_dim, 64, self.weight_multi.irreps_out.num_irreps], torch.nn.functional.silu)
+        else:
+            self.fc = e3nn.nn.FullyConnectedNet([embedding_dim, 64, self.sc_conv.weight_numel], torch.nn.functional.silu)
 
         if self.shared_weights:
             self.weights = e3nn.nn.FullyConnectedNet([embedding_dim, 64, self.to2_lin.weight_numel], torch.nn.functional.silu)
 
     def forward(
-        self, x: torch.Tensor, edge_sh: torch.Tensor, length_emb: torch.Tensor, wigner_D: list, mask_edge: torch.Tensor, mask_sc: torch.Tensor
+        self, x: torch.Tensor, edge_sh: torch.Tensor, length_emb: torch.Tensor, wigner_D: list, mask_edge: torch.Tensor, mask_sc: torch.Tensor,
+        profile=None, prefix="to2"
     ):
-        weights = self.weights(length_emb)
-        out = self.to2_lin(x=x, edge_sh=edge_sh, length_emb=length_emb, wigner_D=wigner_D, mask_edge=mask_edge, mask_sc=mask_sc, weight=weights)
-
-        # sh_sc will be projected to 0e only: sh=Constant
-        if self.edge_include_sc:
+        if profile:
+            profile.describe(prefix, operator=type(self.to2_lin).__name__,
+                             irreps_in=str(self.irreps_in), irreps_out=str(self.irreps_out),
+                             edges=int(x.shape[0]), input_dim=int(x.shape[-1]),
+                             parameters=sum(p.numel() for p in self.parameters()))
+        with profile.gpu_section(f"{prefix}_layer") if profile else nullcontext():
+            with profile.gpu_section(f"{prefix}_radial_mlp") if profile else nullcontext():
+                weights = self.weights(length_emb)
+            with profile.gpu_section(f"{prefix}_core") if profile else nullcontext():
+                out = self.to2_lin(x=x, edge_sh=edge_sh, length_emb=length_emb, wigner_D=wigner_D, mask_edge=mask_edge, mask_sc=mask_sc, weight=weights)
+        with profile.gpu_section(f"{prefix}_self_connection") if profile else nullcontext():
+            # sh_sc will be projected to 0e only: sh=Constant
             if self.shared_weights:
                 w = self.fc(length_emb[mask_sc])
                 _x = self.sc_conv(x[mask_sc], x.new_tensor([[0.28209479177387814]]))
-                out[mask_sc] += self.weight_multi(_x, w)
+                sc_out = self.weight_multi(_x, w)
             else:
                 w = self.fc(length_emb[mask_sc])
-                out[mask_sc] += self.sc_conv(x[mask_sc], x.new_tensor([[0.28209479177387814]]), w)
-        return out
+                sc_out = self.sc_conv(x[mask_sc], x.new_tensor([[0.28209479177387814]]), w)
+            # Fused TO2 may return a view from a custom autograd Function.
+            # Preserve its backward by adding self connections out of place.
+            return out.index_add(0, mask_sc.nonzero(as_tuple=True)[0], sc_out)
 
 
 class GeneralLocalConv(torch.nn.Module):
@@ -516,7 +511,8 @@ class GeneralLocalConv(torch.nn.Module):
         self.scatter = MyScatter(para.N_average)
         self.missing_irreps = TO3_Irreps(None)
 
-        assert "mag_length_emb_to3irreps" in kwargs and "mag_sh_emb_to3irreps" in kwargs
+        if para.magnetism != "nonmag":
+            assert "mag_length_emb_to3irreps" in kwargs and "mag_sh_emb_to3irreps" in kwargs
         self.mag_length_emb_to3irreps = kwargs["mag_length_emb_to3irreps"]
         self.mag_sh_emb_to3irreps = kwargs["mag_sh_emb_to3irreps"]
 
@@ -542,9 +538,9 @@ class GeneralLocalConv(torch.nn.Module):
             irreps_out=self.local_irreps_out,
             embedding_dim=self.basis_size,
             shared_weights=True,
-            edge_include_sc=para.edge_include_sc,
             irreps_sh=self.irreps_sh,
             intdtype=para.torch_int_dtype, floatdtype=para.torch_float_dtype,
+            optimized=para.get("lcaoversion", 0) == 1,
         )
         self.gate = TO3Gate(irreps_in=self.to2tp.irreps_out)
 
@@ -559,59 +555,66 @@ class GeneralLocalConv(torch.nn.Module):
 
         assert self.sc_node.irreps_out == self.lin2_node.irreps_out
 
-    def forward(self, f_node, f_edge, edge_sh, node_emb, length_emb, data: Data, mag_length_emb=None, mag_sh_emb=None, local_mag_env=None):
+    def forward(self, f_node, f_edge, edge_sh, node_emb, length_emb, data: Data, mag_length_emb=None, mag_sh_emb=None, local_mag_env=None, profile=None, prefix="conv"):
         edge_src, edge_dst = data.edge_index_hop
 
-        # self-connection
-        # sc_node = self.sc_node(f_node, node_emb)
-        # sc_edge = self.sc_edge(f_edge, torch.cat([node_emb[edge_src], node_emb[edge_dst], length_emb], dim=-1))
-        sc_node = self.sc_node(f_node)
-        sc_edge = self.sc_edge(f_edge)
+        with profile.gpu_section(f"{prefix}_self_connection") if profile else nullcontext():
+            # self-connection
+            # sc_node = self.sc_node(f_node, node_emb)
+            # sc_edge = self.sc_edge(f_edge, torch.cat([node_emb[edge_src], node_emb[edge_dst], length_emb], dim=-1))
+            sc_node = self.sc_node(f_node)
+            sc_edge = self.sc_edge(f_edge)
 
         # lin1(f_node)|               |scatter->lin2_node
         #             |->so2tp->gate->|
         # lin1(f_edge)|               |->lin2_edge
-        f_cat = self.EdgeFeatureInitialize(
-            f_node=f_node,
-            f_edge=f_edge,
-            edge_sh=edge_sh,
-            length_emb=length_emb,
-            mag_length_emb=mag_length_emb,
-            mag_sh_emb=mag_sh_emb,
-            local_mag_env=local_mag_env,
-            data=data,
-        )
-        if self.nn_split_scale > 1:
-            sub_batch_size = math.ceil(data.num_edges / self.nn_split_scale)
-            f_edge = [[] for _ in range(self.nn_split_scale)]
-            for index_sub_batch in range(self.nn_split_scale):
-                if index_sub_batch == self.nn_split_scale - 1:
-                    start, end = (sub_batch_size * index_sub_batch, data.num_edges)
-                else:
-                    start, end = (sub_batch_size * index_sub_batch, sub_batch_size * (index_sub_batch + 1))
-                sub_f_edge = self.to2tp(
-                    x=f_cat[start:end],
-                    edge_sh=edge_sh[start:end],
-                    length_emb=length_emb[start:end],
-                    wigner_D=[D[start:end] for D in data.wigner_D],
-                    mask_edge=data.mask_edge[start:end],
-                    mask_sc=data.mask_sc[start:end],
-                )
-                f_edge[index_sub_batch] = sub_f_edge
-            f_edge = torch.cat(f_edge, dim=0)
-        else:
-            f_edge = self.to2tp(
-                x=f_cat, edge_sh=edge_sh, length_emb=length_emb, wigner_D=data.wigner_D, mask_edge=data.mask_edge, mask_sc=data.mask_sc
+        with profile.gpu_section(f"{prefix}_prepare") if profile else nullcontext():
+            f_cat = self.EdgeFeatureInitialize(
+                f_node=f_node,
+                f_edge=f_edge,
+                edge_sh=edge_sh,
+                length_emb=length_emb,
+                mag_length_emb=mag_length_emb,
+                mag_sh_emb=mag_sh_emb,
+                local_mag_env=local_mag_env,
+                data=data,
             )
 
-        f_edge = self.gate(f_edge)
-        f_node = self.scatter(f_edge, edge_dst, dim=0, dim_size=data.num_nodes)
-        f_node = self.lin2_node(f_node)
-        f_edge = self.lin2_edge(f_edge)
+        with profile.gpu_section(f"{prefix}_wrapper") if profile else nullcontext():
+            if self.nn_split_scale > 1:
+                sub_batch_size = math.ceil(data.num_edges / self.nn_split_scale)
+                f_edge = [[] for _ in range(self.nn_split_scale)]
+                for index_sub_batch in range(self.nn_split_scale):
+                    if index_sub_batch == self.nn_split_scale - 1:
+                        start, end = (sub_batch_size * index_sub_batch, data.num_edges)
+                    else:
+                        start, end = (sub_batch_size * index_sub_batch, sub_batch_size * (index_sub_batch + 1))
+                    sub_f_edge = self.to2tp(
+                        x=f_cat[start:end],
+                        edge_sh=edge_sh[start:end],
+                        length_emb=length_emb[start:end],
+                        wigner_D=[D[start:end] for D in data.wigner_D],
+                        mask_edge=data.mask_edge[start:end],
+                        mask_sc=data.mask_sc[start:end],
+                        profile=profile, prefix=f"{prefix}_wrapper",
+                    )
+                    f_edge[index_sub_batch] = sub_f_edge
+                f_edge = torch.cat(f_edge, dim=0)
+            else:
+                f_edge = self.to2tp(
+                    x=f_cat, edge_sh=edge_sh, length_emb=length_emb, wigner_D=data.wigner_D, mask_edge=data.mask_edge, mask_sc=data.mask_sc,
+                    profile=profile, prefix=f"{prefix}_wrapper"
+                )
 
-        # add self-connection
-        f_node = f_node + sc_node
-        f_edge = f_edge + sc_edge
+        with profile.gpu_section(f"{prefix}_postprocess") if profile else nullcontext():
+            f_edge = self.gate(f_edge)
+            f_node = self.scatter(f_edge, edge_dst, dim=0, dim_size=data.num_nodes)
+            f_node = self.lin2_node(f_node)
+            f_edge = self.lin2_edge(f_edge)
+
+            # add self-connection
+            f_node = f_node + sc_node
+            f_edge = f_edge + sc_edge
 
         return f_node, f_edge
 
