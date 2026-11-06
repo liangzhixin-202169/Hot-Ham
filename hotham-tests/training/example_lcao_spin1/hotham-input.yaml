@@ -1,0 +1,19 @@
+trainset: ./trainset.pth
+
+hamiltonian_type: lcao
+prediction: 0
+
+orbit:
+  C: [1s,2s,2p,3p,3d]
+rc: 6.4
+L_max: 4
+
+lr: 0.05
+epoch: 1500
+model_save_path: ./.
+checkpoint_interval: 500
+
+magnetism: nonmag
+soc: false
+first_channel: 8
+mid_channel: [8, 8]

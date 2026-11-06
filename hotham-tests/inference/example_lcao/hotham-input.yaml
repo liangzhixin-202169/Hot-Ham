@@ -1,0 +1,17 @@
+trainset: ./trainset.pth
+
+hamiltonian_type: lcao
+prediction: 2
+write: [h_ref, h_pred, olp]
+init_from_checkpoint: ./model.pth
+
+orbit:
+  C: [1s,2s,2p,3p,3d]
+rc: 6.4
+L_max: 7
+
+magnetism: nonmag
+soc: false
+first_channel: 16
+mid_channel: [16, 32]
+self_interaction_by_edge: true

@@ -1,9 +1,8 @@
-.vscode/*
-**/build
-**/mytools
-**/hotham-example
-**/hotham-models
-**/hotham.egg-info
-**/__pycache__
-*job-make
+.vscode/
+mytools/
+hotham-example/
+
+job-make
 openmx2hotham
+
+**/__pycache__

@@ -1,0 +1,24 @@
+trainset: ./trainset.pth
+
+hamiltonian_type: orthtb
+prediction: 0
+
+orbit:
+  Ga: [4s, 4p, 3d]
+  As: [4s, 4p, 3d]
+rc: 7.0
+L_max: 8
+
+lr: 0.05
+epoch: 1500
+model_save_path: ./.
+checkpoint_interval: 500
+
+band_range: [0, 7]
+e_range: [-50, 50]
+using_element_net: true
+using_soc: false
+using_dosloss: false
+delta: 0.1
+Ce: [8, 8, 16]
+Co: [0, 0, 16]

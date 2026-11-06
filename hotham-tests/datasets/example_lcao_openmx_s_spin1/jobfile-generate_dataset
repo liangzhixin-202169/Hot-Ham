@@ -1,0 +1,12 @@
+#!/bin/bash
+#SBATCH --partition=6330ib
+#SBATCH --error=err.%j
+#SBATCH --output=out.%j
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=14
+#SBATCH --job-name=dataset
+
+source /fsb/home/jiansun/js_liny/software_env/miniconda3/etc/profile.d/conda.sh
+conda activate hotham_dev1
+python generate_dataset.py

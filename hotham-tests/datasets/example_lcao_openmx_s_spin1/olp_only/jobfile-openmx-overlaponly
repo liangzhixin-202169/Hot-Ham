@@ -1,0 +1,30 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --error=err.%j
+#SBATCH --output=out.%j
+#SBATCH --ntasks=4
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=olp
+#SBATCH --partition=6338
+
+module purge
+module load oneapi/2024.0/compiler
+module load oneapi/2024.0/mpi
+module load oneapi/2024.0/mkl
+
+export OMP_NUM_THREADS=1
+export OPENMX='/fsb/home/jiansun/js_liny/software/openmx4.0/work/openmx'
+
+if [ ! -f finished ] && [ ! -f computing ] && [ ! -f failed ]; then
+   touch computing
+   if ! srun --mpi=pmi2 -n 4 "$OPENMX" openmx.dat -olp > log; then
+      touch failed
+      rm -f computing
+      exit 1
+   fi
+   rm -rf openmx_rst
+   rm -f *.cube
+   rm -f openmx.scfout
+   touch finished
+   rm -f computing
+fi

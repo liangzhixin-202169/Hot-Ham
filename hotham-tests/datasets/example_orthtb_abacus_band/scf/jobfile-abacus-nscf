@@ -1,0 +1,49 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --error=err.%j
+#SBATCH --output=out.%j
+#SBATCH --ntasks=4
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=abacus-nscf
+#SBATCH --partition=6338
+
+module purge
+module load gcc/12.1.0
+module load oneapi/2024.0/compiler
+module load oneapi/2024.0/mpi
+module load oneapi/2024.0/mkl
+
+source /fsb/home/jiansun/js_liny/software/abacus-develop-3.10.1/toolchain/abacus_env.sh
+
+ulimit -c 0
+export OMP_NUM_THREADS=1
+export ASE_ABACUS_COMMAND='/fsb/home/jiansun/js_liny/software/abacus-develop-3.10.1/bin/abacus'
+
+if [ ! -f finished_nscf ] && [ ! -f computing_nscf ] && [ ! -f failed_nscf ]; then
+   if [ ! -d OUT.ABACUS_scf ] && [ -f finished ] && [ -f OUT.ABACUS/SPIN1_CHG.cube ]; then
+      mv OUT.ABACUS OUT.ABACUS_scf
+      mv INPUT INPUT.scf
+      mv KPT KPT.scf
+      cp INPUT.nscf INPUT
+      cp KPT.nscf KPT
+      mv finished finished_scf
+      mv log log_scf
+   fi
+   if [ ! -f OUT.ABACUS_scf/SPIN1_CHG.cube ]; then
+      echo 'Missing SCF charge density: OUT.ABACUS_scf/SPIN1_CHG.cube' >&2
+      exit 1
+   fi
+   touch computing_nscf
+   if ! srun --mpi=pmi2 -n 4 "$ASE_ABACUS_COMMAND" > log_nscf; then
+      touch failed_nscf
+      rm -f computing_nscf
+      exit 1
+   fi
+   if [ ! -s OUT.ABACUS/BANDS_1.dat ] || [ ! -s OUT.ABACUS/running_nscf.log ]; then
+      touch failed_nscf
+      rm -f computing_nscf
+      exit 1
+   fi
+   touch finished_nscf
+   rm -f computing_nscf
+fi

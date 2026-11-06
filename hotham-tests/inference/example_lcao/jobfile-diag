@@ -1,0 +1,15 @@
+#!/bin/bash
+#SBATCH --partition=97554090ib
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --output=diag.out.%j
+#SBATCH --error=diag.err.%j
+#SBATCH --job-name=lcao_diag
+
+set -eo pipefail
+source /fsb/home/jiansun/js_liny/software_env/miniconda3/etc/profile.d/conda.sh
+conda activate py313
+export OMP_NUM_THREADS=1
+python diagonal.py -diag

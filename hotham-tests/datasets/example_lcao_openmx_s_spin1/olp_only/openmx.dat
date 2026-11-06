@@ -1,0 +1,43 @@
+System.CurrentDirectory        .
+System.Name        openmx
+DATA.PATH        /fsb/home/jiansun/js_liny/software/openmx4.0/DFT_DATA19
+level.of.fileout        1
+Species.Number        1
+<Definition.of.Atomic.Species
+    C  C6.0-s2p2d1  C_PBE19
+Definition.of.Atomic.Species>
+
+Atoms.Number        2
+Atoms.SpeciesAndCoordinates.Unit        Ang
+<Atoms.SpeciesAndCoordinates
+    1  C  0.0  0.0  0.0  2.0  2.0
+    2  C  1.23  0.71  0.0  2.0  2.0
+Atoms.SpeciesAndCoordinates>
+
+Atoms.UnitVectors.Unit        Ang
+<Atoms.UnitVectors
+    2.46  0.0  0.0
+    -1.23  2.13  0.0
+    0.0  0.0  40.0
+Atoms.UnitVectors>
+
+scf.Kgrid        30 30 1
+scf.Electric.Field        0.0000 0.0000 0.0000
+scf.maxIter        200
+scf.Mixing.History        30
+scf.ElectronicTemperature        300
+scf.energycutoff        300
+scf.Init.Mixing.Weight        0.2
+scf.Min.Mixing.Weight        0.001
+scf.Max.Mixing.Weight        0.2
+scf.criterion        1e-08
+scf.XcType        GGA-PBE
+scf.EigenvalueSolver        Band
+scf.Mixing.Type        rmm-diisk
+scf.SpinOrbit.Coupling        Off
+MD.maxIter        1
+MD.TimeStep        1
+MD.Opt.criterion        0.0001
+MD.Type        nomd
+level.of.stdout        1
+HS.fileout        On
