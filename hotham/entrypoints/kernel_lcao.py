@@ -251,7 +251,7 @@ class Kernel(torch.nn.Module):
                 if self.para.lr_scheduler == "ExponentialLR":
                     self.lr_scheduler.step()
                 elif self.para.lr_scheduler == "ReduceLROnPlateau":
-                    self.lr_scheduler.step(mae_global.item())
+                    self.lr_scheduler.step((torch.sqrt(mse_global) + mae_global).item())
 
             self.model.eval()
             with torch.no_grad():
