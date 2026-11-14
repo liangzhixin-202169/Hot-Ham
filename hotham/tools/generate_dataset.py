@@ -661,8 +661,13 @@ class AbacusData(DataBase):
                 magmom[active, 2] = np.degrees(np.arccos(np.clip(components[active, 1] / length[active], -1, 1)))
                 magmom[active, 3] = np.degrees(np.arctan2(components[active, 0], components[active, 2])) % 360
 
-            #fix for relaxed xyz to find correct neighbor
-            structure.wrap(eps=1.0e-7)
+            # fix for abacus to find true neighbor
+            scaled = structure.get_scaled_positions(wrap=False)
+            shifted = scaled + 10000.0
+            scaled = shifted - np.trunc(shifted)
+            scaled[scaled >= 1.0] -= 1.0
+            scaled[scaled < 0.0] += 1.0
+            structure.set_scaled_positions(scaled)
 
             # atom_type, n_type, lattice, position
             AtomType = torch.tensor([self.AtomNumber_to_AtomType[atomnumber] for atomnumber in structure.numbers], dtype=self.torch_int_dtype)

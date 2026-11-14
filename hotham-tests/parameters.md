@@ -20,7 +20,7 @@ For other parameters used in specific `*.py` files, check the table below.
 | `basis` | `Chebyshev` | str | Radial distance embedding type. Another choice is `Gaussian`. |
 | `basis_size` | `32` | int | Number of radial embedding features. |
 | `L_max` | — | int | Maximum angular-momentum order of equivariant features, must >= 2*l for the highest orbital in `orbit`.<br>For example, if `f`(l=3) is in `orbit`, use `L_max >= 6`.<br>The `L_max` for dataset must >= the `L_max` for training. |
-| `rc` | — | float | Radial embedding cutoff in Å for both models. Set it slightly larger than the largest atomic orbital radius.<br>OrthTB also uses it as the neighbor cutoff when generating graph edges. |
+| `rc` | — | float | Radial embedding cutoff in Å for both models. Set it slightly larger than twice the largest orbital cutoff radius among all elements in the system.<br>OrthTB also uses it as the neighbor cutoff when generating graph edges. |
 | `nn_split_scale` | `1` | int | Number of edge chunks used in convolution; `1` disables splitting. |
 
 ### Training parameters (Shared)

@@ -14,7 +14,7 @@ Here are some basic parameters you need to know when training a model, see the [
 - `hamiltonian_type`: `lcao` or `orthtb`.
 - `prediction`: set to `0` for training.
 - `orbit`: use all orbitals for LCAO, select orbitals for OrthTB.
-- `rc`: Radial embedding cutoff in Å.
+- `rc`: Radial embedding cutoff in Å. Set it slightly larger than twice the largest orbital cutoff radius among all elements in the system.
 - `L_max`: maximum angular momentum order of model features, at least 2*l_max for orbits in `orbit`.
 - `lr`: initial learning rate.
 - `epoch`: number of epochs in this run.

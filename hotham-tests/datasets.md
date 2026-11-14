@@ -133,7 +133,7 @@ Before running it, edit the `inputfile` dictionary near the end of the script:
 - Set `hamiltonian_type` to `orthtb`.
 - Set `orbit` to the higher-principal-quantum-number orbitals used by the TB model.
 - `L_max` sets the highest angular momentum order stored in the dataset. It can be higher than the order used for training or inference. Change it only when needed.
-- Set `rc` slightly larger than the longest atomic bond length.
+- Set `rc` in Å, slightly larger than twice the largest orbital cutoff radius among all elements in the system.
 - Set `k_gap` to select every nth band k-point; use `1` to keep all points.
 - Don't modify the LCAO only parameters `magnetism`, `soc`, `orbital_cutoff`, or `nonlocal_cutoff`.
 
