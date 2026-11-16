@@ -10,9 +10,9 @@ rc: 7.0
 L_max: 8
 
 lr: 0.05
-epoch: 1500
+epoch: 10
 model_save_path: ./.
-checkpoint_interval: 500
+checkpoint_interval: 5
 
 band_range: [0, 7]
 e_range: [-50, 50]

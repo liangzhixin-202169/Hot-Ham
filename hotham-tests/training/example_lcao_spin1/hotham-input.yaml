@@ -9,9 +9,9 @@ rc: 6.4
 L_max: 4
 
 lr: 0.05
-epoch: 1500
+epoch: 10
 model_save_path: ./.
-checkpoint_interval: 500
+checkpoint_interval: 5
 
 magnetism: nonmag
 soc: false

@@ -1,0 +1,15 @@
+# External interfaces and runtime boundaries
+
+Scope: sequential DFT-data handoff. No forcefield/MD, enhanced-sampling/MD, eager/TorchScript/AOTI MD hook or runtime communication interface is declared by this delivery.
+
+| Producer → consumer | Actual interface and mode | Dependencies and constraints | Joint cases |
+| --- | --- | --- | --- |
+| ABACUS → dataset generator | Existing hotham-tests/datasets/example_lcao_abacus_{h,s}_spin1/generate_dataset.py and example_orthtb_abacus_band/generate_dataset.py parse on-disk H/S CSR, overlap-only or band outputs | Guide recommends ABACUS 3.10.1 LTS; MPI and actual pseudopotential/orbital files required; SCF/get_S/NSCF capabilities depend on route | Corresponding three example-* dataset cases in manifest |
+| OpenMX → dataset generator | Existing hotham-tests/datasets/example_lcao_openmx_{h,s}_spin1/generate_dataset.py and example_orthtb_openmx_band/generate_dataset.py consume converted Hamiltonian, patched overlap or band output | Matching 3.9.9/4.0.1 interface sources in hotham-interface/openmx/; MPI C compiler for converter, -olp patch for overlap-only | Corresponding three example-* dataset cases in manifest |
+| Supplied checkpoint/dataset → Hot-Ham → diagonal.py | Serialized PyTorch model/data are loaded in Hot-Ham; exported ABACUS old CSR is reloaded by hotham-tests/inference/example_lcao/diagonal.py | Compatible Python/PyTorch/custom dependencies and architecture; preserve matching structure, orbit ordering, spin, dtype/device and consumer unit conversions | infer-example-lcao |
+
+These are supported implementation routes, not newly tested version compatibility. Original paths, expected formats and stage commands are in hotham-tests/datasets.md and hotham-tests/inference.md. Follow install.md for converter preparation; the test READMEs give the exact staged commands and original resources. External scientific engines run separately and may use separate environments. Actual generated outputs must then be loaded and checked in the consuming Hot-Ham environment; two successful imports do not prove interoperability.
+
+For each route use copied original structure and inputs with their original hierarchy, basis and units. Keep the original spin and element/orbital order; inspect the selected producer/converter and consumer rather than treating filenames as compatibility guarantees. Convergence, export completeness and new trainset content must all be checked. Training receives supplied datasets independently of these DFT cases; no unknown external engine checkout is automatically changed.
+
+External executables, pseudopotentials and orbitals are user-configured prerequisites; they are not bundled here. Missing resources are blocked, unexecuted joint runs not_run. All installation, single-tool and joint test results in this delivery are not_run. Future evidence must identify participating source/version, runtime/device, commands, serialized resource identity, exits, logs and actual consumer output assessment. Compatibility configuration and runtime activation remain separate later steps.

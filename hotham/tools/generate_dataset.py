@@ -210,15 +210,21 @@ class DataBase(ABC):
         return data
 
     def find_abacus_neighbor(self, frame: ase.Atoms, cutoff):
-        i, j, d, D, S = neighbor_list("ijdDS", a=frame, cutoff=cutoff, self_interaction=True)
         phi_cutoff = self.para["orbital_cutoff"]
         projector_cutoff = self.para["nonlocal_cutoff"]
         symbols = frame.get_chemical_symbols()
         phi_rcut = np.array([phi_cutoff[symbol] for symbol in symbols], dtype=self.para.numpy_float_dtype)
         beta_rcut = np.array([projector_cutoff[symbol] for symbol in symbols], dtype=self.para.numpy_float_dtype)
+        # Phi_i and Phi_j may couple through a projector on a third species.
+        # ASE sums per-atom radii in Angstrom; an atom's own beta cutoff is
+        # therefore insufficient to bound every Phi_i-beta_k-Phi_j pair.
+        max_beta_rcut = np.max(beta_rcut)
+        candidate_cutoff = np.maximum(cutoff, (phi_rcut + max_beta_rcut) * Bohr)
+        i, j, d, D, S = neighbor_list("ijdDS", a=frame, cutoff=candidate_cutoff, self_interaction=True)
         # Build all Phi-beta connections once.  The enlarged cutoff only
         # generates candidates; the exact ABACUS condition is checked below.
-        beta_candidate_cutoff = phi_rcut + np.max(beta_rcut)
+        # A scalar ASE cutoff is a pair distance, also in Angstrom.
+        beta_candidate_cutoff = (np.max(phi_rcut) + max_beta_rcut) * Bohr
         bi, bj, bd, bD, bS = neighbor_list("ijdDS", a=frame, cutoff=beta_candidate_cutoff, self_interaction=True)
         beta_neighbors = {}
         zero_shift = (0, 0, 0)
@@ -655,8 +661,13 @@ class AbacusData(DataBase):
                 magmom[active, 2] = np.degrees(np.arccos(np.clip(components[active, 1] / length[active], -1, 1)))
                 magmom[active, 3] = np.degrees(np.arctan2(components[active, 0], components[active, 2])) % 360
 
-            #fix for relaxed xyz to find correct neighbor
-            structure.wrap(eps=1.0e-7)
+            # fix for abacus to find true neighbor
+            scaled = structure.get_scaled_positions(wrap=False)
+            shifted = scaled + 10000.0
+            scaled = shifted - np.trunc(shifted)
+            scaled[scaled >= 1.0] -= 1.0
+            scaled[scaled < 0.0] += 1.0
+            structure.set_scaled_positions(scaled)
 
             # atom_type, n_type, lattice, position
             AtomType = torch.tensor([self.AtomNumber_to_AtomType[atomnumber] for atomnumber in structure.numbers], dtype=self.torch_int_dtype)

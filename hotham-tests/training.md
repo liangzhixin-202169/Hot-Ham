@@ -14,7 +14,7 @@ Here are some basic parameters you need to know when training a model, see the [
 - `hamiltonian_type`: `lcao` or `orthtb`.
 - `prediction`: set to `0` for training.
 - `orbit`: use all orbitals for LCAO, select orbitals for OrthTB.
-- `rc`: Radial embedding cutoff in Å.
+- `rc`: Radial embedding cutoff in Å. Set it slightly larger than twice the largest orbital cutoff radius among all elements in the system.
 - `L_max`: maximum angular momentum order of model features, at least 2*l_max for orbits in `orbit`.
 - `lr`: initial learning rate.
 - `epoch`: number of epochs in this run.
@@ -58,13 +58,4 @@ To resume training, keep the dataset and model settings consistent with the chec
 
 1. Enter the example directory and review `hotham-input.yaml` and `jobfile-hotham`.
 2. Submit the training job with `sbatch jobfile-hotham`.
-3. After the job finishes, check `log.txt` and the saved checkpoints in the example directory.
-
-**Reference results**
-After running each example with its provided dataset and input file for at least `1500` epochs, check the `Train_MSE` and `Train_MAE` values on the `Epoch:1500` line in `log.txt`. Both values should be below the following conservative reference limits:
-
-| Example | Train_MSE | Train_MAE |
-| --- | ---: | ---: |
-| `example_lcao_spin1` | 0.001 | 0.03 |
-| `example_tb` | 0.001 | 0.03 |
-
+3. After the job finishes, check `log.txt` and the saved checkpoints in `model_save_path/checkpoint/` (`./checkpoint/` in these examples).
