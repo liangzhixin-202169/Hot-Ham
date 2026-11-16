@@ -1,0 +1,763 @@
+{
+  "schema_version": 1,
+  "id": "hotham",
+  "name": "Hot-Ham",
+  "environment": {
+    "hardware": "cpu_or_gpu",
+    "requirements": [
+      "Python >3.10; dependency pins and ranges in setup.py",
+      "torch-scatter built for the selected PyTorch/CUDA combination (README.md)",
+      "Selected compatible CUDA device for supplied training/inference examples; CPU dataset generation",
+      "Optional ABACUS/OpenMX executables, MPI, pseudopotentials/orbitals and matching OpenMX converter/patch for external-data cases"
+    ],
+    "parallelism": {
+      "supported": [
+        "serial",
+        "processes",
+        "devices"
+      ],
+      "threads": 1,
+      "processes": 1,
+      "gpus": 1
+    }
+  },
+  "guidance": {
+    "installation": [
+      "aimlab-tools/install.md"
+    ],
+    "configuration": [
+      "aimlab-tools/manual.md",
+      "aimlab-tools/runtime-composition.md"
+    ]
+  },
+  "functions": [
+    {
+      "id": "hotham.dataset.lcao-abacus-h-spin1",
+      "name": "example_lcao_abacus_h_spin1",
+      "description": "Prepare Hamiltonian H and overlap S using the existing editable Python dataset script. External calculations are prerequisites.",
+      "entrypoint": "hotham-tests/datasets/example_lcao_abacus_h_spin1/generate_dataset.py",
+      "inputs": [
+        {
+          "id": "source-data",
+          "type": "directory",
+          "format": "Example-layout directory",
+          "description": "Run ABACUS SCF in scf/ with H/S export; confirm SCF convergence and nonempty CSR matrices. Stage at work directory root; paths and orbit definitions are configured in the copied generator.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "id": "trainset",
+          "type": "file",
+          "format": "PyTorch .pth",
+          "description": "New nonempty trainset.pth in work directory",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "parameters": [],
+      "operation": {
+        "command": [
+          "{python}",
+          "generate_dataset.py"
+        ],
+        "failure_handling": "Keep command, exit code and logs. Missing dependencies/resources: blocked; execution/output failure: failed. Do not resubmit unknown jobs or change scientific settings automatically."
+      },
+      "tests": [
+        "example-lcao-abacus-h-spin1"
+      ]
+    },
+    {
+      "id": "hotham.dataset.lcao-abacus-s-spin1",
+      "name": "example_lcao_abacus_s_spin1",
+      "description": "Prepare overlap S (no H required) using the existing editable Python dataset script. External calculations are prerequisites.",
+      "entrypoint": "hotham-tests/datasets/example_lcao_abacus_s_spin1/generate_dataset.py",
+      "inputs": [
+        {
+          "id": "source-data",
+          "type": "directory",
+          "format": "Example-layout directory",
+          "description": "Run ABACUS get_S in olp_only/ (one MPI process recommended); require nonempty overlap CSR. Stage at work directory root; paths and orbit definitions are configured in the copied generator.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "id": "trainset",
+          "type": "file",
+          "format": "PyTorch .pth",
+          "description": "New nonempty trainset.pth in work directory",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "parameters": [],
+      "operation": {
+        "command": [
+          "{python}",
+          "generate_dataset.py"
+        ],
+        "failure_handling": "Keep command, exit code and logs. Missing dependencies/resources: blocked; execution/output failure: failed. Do not resubmit unknown jobs or change scientific settings automatically."
+      },
+      "tests": [
+        "example-lcao-abacus-s-spin1"
+      ]
+    },
+    {
+      "id": "hotham.dataset.lcao-openmx-h-spin1",
+      "name": "example_lcao_openmx_h_spin1",
+      "description": "Prepare Hamiltonian H and overlap S using the existing editable Python dataset script. External calculations are prerequisites.",
+      "entrypoint": "hotham-tests/datasets/example_lcao_openmx_h_spin1/generate_dataset.py",
+      "inputs": [
+        {
+          "id": "source-data",
+          "type": "directory",
+          "format": "Example-layout directory",
+          "description": "Run OpenMX SCF in scf/, confirm convergence, then openmx2hotham openmx.scfout ham olp > hamiltonian.txt. Stage at work directory root; paths and orbit definitions are configured in the copied generator.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "id": "trainset",
+          "type": "file",
+          "format": "PyTorch .pth",
+          "description": "New nonempty trainset.pth in work directory",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "parameters": [],
+      "operation": {
+        "command": [
+          "{python}",
+          "generate_dataset.py"
+        ],
+        "failure_handling": "Keep command, exit code and logs. Missing dependencies/resources: blocked; execution/output failure: failed. Do not resubmit unknown jobs or change scientific settings automatically."
+      },
+      "tests": [
+        "example-lcao-openmx-h-spin1"
+      ]
+    },
+    {
+      "id": "hotham.dataset.lcao-openmx-s-spin1",
+      "name": "example_lcao_openmx_s_spin1",
+      "description": "Prepare overlap S (no H required) using the existing editable Python dataset script. External calculations are prerequisites.",
+      "entrypoint": "hotham-tests/datasets/example_lcao_openmx_s_spin1/generate_dataset.py",
+      "inputs": [
+        {
+          "id": "source-data",
+          "type": "directory",
+          "format": "Example-layout directory",
+          "description": "Run matching patched OpenMX -olp in olp_only/; require overlap.txt. Stage at work directory root; paths and orbit definitions are configured in the copied generator.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "id": "trainset",
+          "type": "file",
+          "format": "PyTorch .pth",
+          "description": "New nonempty trainset.pth in work directory",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "parameters": [],
+      "operation": {
+        "command": [
+          "{python}",
+          "generate_dataset.py"
+        ],
+        "failure_handling": "Keep command, exit code and logs. Missing dependencies/resources: blocked; execution/output failure: failed. Do not resubmit unknown jobs or change scientific settings automatically."
+      },
+      "tests": [
+        "example-lcao-openmx-s-spin1"
+      ]
+    },
+    {
+      "id": "hotham.dataset.orthtb-abacus-band",
+      "name": "example_orthtb_abacus_band",
+      "description": "Prepare reference bands and structure data using the existing editable Python dataset script. External calculations are prerequisites.",
+      "entrypoint": "hotham-tests/datasets/example_orthtb_abacus_band/generate_dataset.py",
+      "inputs": [
+        {
+          "id": "source-data",
+          "type": "directory",
+          "format": "Example-layout directory",
+          "description": "Run ABACUS SCF then NSCF bands in scf/ following the original jobfiles; confirm convergence and nonempty band outputs. Stage at work directory root; paths and orbit definitions are configured in the copied generator.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "id": "trainset",
+          "type": "file",
+          "format": "PyTorch .pth",
+          "description": "New nonempty trainset.pth in work directory",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "parameters": [],
+      "operation": {
+        "command": [
+          "{python}",
+          "generate_dataset.py"
+        ],
+        "failure_handling": "Keep command, exit code and logs. Missing dependencies/resources: blocked; execution/output failure: failed. Do not resubmit unknown jobs or change scientific settings automatically."
+      },
+      "tests": [
+        "example-orthtb-abacus-band"
+      ]
+    },
+    {
+      "id": "hotham.dataset.orthtb-no-band",
+      "name": "example_orthtb_no_band",
+      "description": "Prepare structure data (no H or reference bands required) using the existing editable Python dataset script. External calculations are prerequisites.",
+      "entrypoint": "hotham-tests/datasets/example_orthtb_no_band/generate_dataset.py",
+      "inputs": [
+        {
+          "id": "source-data",
+          "type": "directory",
+          "format": "Example-layout directory",
+          "description": "No DFT stage; use supplied model.xyz. Stage at work directory root; paths and orbit definitions are configured in the copied generator.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "id": "trainset",
+          "type": "file",
+          "format": "PyTorch .pth",
+          "description": "New nonempty trainset.pth in work directory",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "parameters": [],
+      "operation": {
+        "command": [
+          "{python}",
+          "generate_dataset.py"
+        ],
+        "failure_handling": "Keep command, exit code and logs. Missing dependencies/resources: blocked; execution/output failure: failed. Do not resubmit unknown jobs or change scientific settings automatically."
+      },
+      "tests": [
+        "example-orthtb-no-band"
+      ]
+    },
+    {
+      "id": "hotham.dataset.orthtb-openmx-band",
+      "name": "example_orthtb_openmx_band",
+      "description": "Prepare reference bands and structure data using the existing editable Python dataset script. External calculations are prerequisites.",
+      "entrypoint": "hotham-tests/datasets/example_orthtb_openmx_band/generate_dataset.py",
+      "inputs": [
+        {
+          "id": "source-data",
+          "type": "directory",
+          "format": "Example-layout directory",
+          "description": "Run OpenMX SCF and bands in scf/ following the original jobfiles; confirm convergence and nonempty band outputs. Stage at work directory root; paths and orbit definitions are configured in the copied generator.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "id": "trainset",
+          "type": "file",
+          "format": "PyTorch .pth",
+          "description": "New nonempty trainset.pth in work directory",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "parameters": [],
+      "operation": {
+        "command": [
+          "{python}",
+          "generate_dataset.py"
+        ],
+        "failure_handling": "Keep command, exit code and logs. Missing dependencies/resources: blocked; execution/output failure: failed. Do not resubmit unknown jobs or change scientific settings automatically."
+      },
+      "tests": [
+        "example-orthtb-openmx-band"
+      ]
+    },
+    {
+      "id": "hotham.train",
+      "name": "Model train",
+      "description": "LCAO/OrthTB training",
+      "entrypoint": "hotham/entrypoints/main.py",
+      "inputs": [
+        {
+          "id": "input-yaml",
+          "type": "file",
+          "format": "YAML",
+          "description": "Hot-Ham configuration; relative file paths resolve from run directory.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        },
+        {
+          "id": "trainset",
+          "type": "file",
+          "format": "PyTorch .pth",
+          "description": "Dataset named by trainset in YAML; stage preserving that path.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "id": "checkpoints",
+          "type": "directory",
+          "format": "PyTorch checkpoints",
+          "description": "checkpoint/cp*.pth under model_save_path from YAML, at checkpoint_interval.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "parameters": [],
+      "operation": {
+        "command": [
+          "{python}",
+          "-m",
+          "torch.distributed.run",
+          "--standalone",
+          "--nproc_per_node=1",
+          "-m",
+          "hotham.entrypoints.main",
+          "{input-yaml}"
+        ],
+        "failure_handling": "Keep command, exit code and logs. Missing dependencies/resources: blocked; execution/output failure: failed. Do not resubmit unknown jobs or change scientific settings automatically."
+      },
+      "tests": [
+        "train-example-lcao-spin1",
+        "train-example-tb"
+      ]
+    },
+    {
+      "id": "hotham.infer",
+      "name": "Model infer",
+      "description": "LCAO Hamiltonian prediction and CSR export; band post-processing is a separate subsequent command in the example.",
+      "entrypoint": "hotham/entrypoints/main.py",
+      "inputs": [
+        {
+          "id": "input-yaml",
+          "type": "file",
+          "format": "YAML",
+          "description": "Hot-Ham configuration; relative file paths resolve from run directory.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        },
+        {
+          "id": "trainset",
+          "type": "file",
+          "format": "PyTorch .pth",
+          "description": "Dataset named by trainset in YAML; stage preserving that path.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        },
+        {
+          "id": "checkpoint",
+          "type": "file",
+          "format": "PyTorch .pth",
+          "description": "Checkpoint named by init_from_checkpoint; model architecture must match YAML.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "id": "matrices",
+          "type": "files",
+          "format": "ABACUS old CSR",
+          "description": "h_pred_0.csr, h_ref_0.csr and olp.csr for supplied LCAO inference configuration.",
+          "required": true,
+          "display": {
+            "priority": 100,
+            "advanced": false,
+            "reason": "Required scientific input or output"
+          }
+        }
+      ],
+      "parameters": [],
+      "operation": {
+        "command": [
+          "{python}",
+          "-m",
+          "torch.distributed.run",
+          "--standalone",
+          "--nproc_per_node=1",
+          "-m",
+          "hotham.entrypoints.main",
+          "{input-yaml}"
+        ],
+        "failure_handling": "Keep command, exit code and logs. Missing dependencies/resources: blocked; execution/output failure: failed. Do not resubmit unknown jobs or change scientific settings automatically."
+      },
+      "tests": [
+        "infer-example-lcao"
+      ]
+    }
+  ],
+  "tests": {
+    "cases": [
+      {
+        "id": "example-lcao-abacus-h-spin1",
+        "function_id": "hotham.dataset.lcao-abacus-h-spin1",
+        "directory": "aimlab-tools/tests/example-lcao-abacus-h-spin1",
+        "instructions": "aimlab-tools/tests/example-lcao-abacus-h-spin1/README.md",
+        "entrypoint": "hotham-tests/datasets/example_lcao_abacus_h_spin1/generate_dataset.py",
+        "resources": [
+          "hotham-tests/datasets/example_lcao_abacus_h_spin1",
+          "hotham-tests/datasets.md"
+        ],
+        "expected_outputs": [
+          {
+            "path": "trainset.pth",
+            "format": "PyTorch .pth",
+            "description": "Hamiltonian H and overlap S"
+          }
+        ],
+        "pass_criteria": [
+          "All required calculation/conversion commands and generator exit 0.",
+          "Load newly generated trainset.pth in the actual consuming Hot-Ham environment: at least one sample, nonempty positions, finite numerical tensors, Hamiltonian H and overlap S."
+        ]
+      },
+      {
+        "id": "example-lcao-abacus-s-spin1",
+        "function_id": "hotham.dataset.lcao-abacus-s-spin1",
+        "directory": "aimlab-tools/tests/example-lcao-abacus-s-spin1",
+        "instructions": "aimlab-tools/tests/example-lcao-abacus-s-spin1/README.md",
+        "entrypoint": "hotham-tests/datasets/example_lcao_abacus_s_spin1/generate_dataset.py",
+        "resources": [
+          "hotham-tests/datasets/example_lcao_abacus_s_spin1",
+          "hotham-tests/datasets.md"
+        ],
+        "expected_outputs": [
+          {
+            "path": "trainset.pth",
+            "format": "PyTorch .pth",
+            "description": "overlap S (no H required)"
+          }
+        ],
+        "pass_criteria": [
+          "All required calculation/conversion commands and generator exit 0.",
+          "Load newly generated trainset.pth in the actual consuming Hot-Ham environment: at least one sample, nonempty positions, finite numerical tensors, overlap S (no H required)."
+        ]
+      },
+      {
+        "id": "example-lcao-openmx-h-spin1",
+        "function_id": "hotham.dataset.lcao-openmx-h-spin1",
+        "directory": "aimlab-tools/tests/example-lcao-openmx-h-spin1",
+        "instructions": "aimlab-tools/tests/example-lcao-openmx-h-spin1/README.md",
+        "entrypoint": "hotham-tests/datasets/example_lcao_openmx_h_spin1/generate_dataset.py",
+        "resources": [
+          "hotham-tests/datasets/example_lcao_openmx_h_spin1",
+          "hotham-tests/datasets.md"
+        ],
+        "expected_outputs": [
+          {
+            "path": "trainset.pth",
+            "format": "PyTorch .pth",
+            "description": "Hamiltonian H and overlap S"
+          }
+        ],
+        "pass_criteria": [
+          "All required calculation/conversion commands and generator exit 0.",
+          "Load newly generated trainset.pth in the actual consuming Hot-Ham environment: at least one sample, nonempty positions, finite numerical tensors, Hamiltonian H and overlap S."
+        ]
+      },
+      {
+        "id": "example-lcao-openmx-s-spin1",
+        "function_id": "hotham.dataset.lcao-openmx-s-spin1",
+        "directory": "aimlab-tools/tests/example-lcao-openmx-s-spin1",
+        "instructions": "aimlab-tools/tests/example-lcao-openmx-s-spin1/README.md",
+        "entrypoint": "hotham-tests/datasets/example_lcao_openmx_s_spin1/generate_dataset.py",
+        "resources": [
+          "hotham-tests/datasets/example_lcao_openmx_s_spin1",
+          "hotham-tests/datasets.md"
+        ],
+        "expected_outputs": [
+          {
+            "path": "trainset.pth",
+            "format": "PyTorch .pth",
+            "description": "overlap S (no H required)"
+          }
+        ],
+        "pass_criteria": [
+          "All required calculation/conversion commands and generator exit 0.",
+          "Load newly generated trainset.pth in the actual consuming Hot-Ham environment: at least one sample, nonempty positions, finite numerical tensors, overlap S (no H required)."
+        ]
+      },
+      {
+        "id": "example-orthtb-abacus-band",
+        "function_id": "hotham.dataset.orthtb-abacus-band",
+        "directory": "aimlab-tools/tests/example-orthtb-abacus-band",
+        "instructions": "aimlab-tools/tests/example-orthtb-abacus-band/README.md",
+        "entrypoint": "hotham-tests/datasets/example_orthtb_abacus_band/generate_dataset.py",
+        "resources": [
+          "hotham-tests/datasets/example_orthtb_abacus_band",
+          "hotham-tests/datasets.md"
+        ],
+        "expected_outputs": [
+          {
+            "path": "trainset.pth",
+            "format": "PyTorch .pth",
+            "description": "reference bands and structure data"
+          }
+        ],
+        "pass_criteria": [
+          "All required calculation/conversion commands and generator exit 0.",
+          "Load newly generated trainset.pth in the actual consuming Hot-Ham environment: at least one sample, nonempty positions, finite numerical tensors, reference bands and structure data."
+        ]
+      },
+      {
+        "id": "example-orthtb-no-band",
+        "function_id": "hotham.dataset.orthtb-no-band",
+        "directory": "aimlab-tools/tests/example-orthtb-no-band",
+        "instructions": "aimlab-tools/tests/example-orthtb-no-band/README.md",
+        "entrypoint": "hotham-tests/datasets/example_orthtb_no_band/generate_dataset.py",
+        "resources": [
+          "hotham-tests/datasets/example_orthtb_no_band",
+          "hotham-tests/datasets.md"
+        ],
+        "expected_outputs": [
+          {
+            "path": "trainset.pth",
+            "format": "PyTorch .pth",
+            "description": "structure data (no H or reference bands required)"
+          }
+        ],
+        "pass_criteria": [
+          "All required calculation/conversion commands and generator exit 0.",
+          "Load newly generated trainset.pth in the actual consuming Hot-Ham environment: at least one sample, nonempty positions, finite numerical tensors, structure data (no H or reference bands required)."
+        ]
+      },
+      {
+        "id": "example-orthtb-openmx-band",
+        "function_id": "hotham.dataset.orthtb-openmx-band",
+        "directory": "aimlab-tools/tests/example-orthtb-openmx-band",
+        "instructions": "aimlab-tools/tests/example-orthtb-openmx-band/README.md",
+        "entrypoint": "hotham-tests/datasets/example_orthtb_openmx_band/generate_dataset.py",
+        "resources": [
+          "hotham-tests/datasets/example_orthtb_openmx_band",
+          "hotham-tests/datasets.md"
+        ],
+        "expected_outputs": [
+          {
+            "path": "trainset.pth",
+            "format": "PyTorch .pth",
+            "description": "reference bands and structure data"
+          }
+        ],
+        "pass_criteria": [
+          "All required calculation/conversion commands and generator exit 0.",
+          "Load newly generated trainset.pth in the actual consuming Hot-Ham environment: at least one sample, nonempty positions, finite numerical tensors, reference bands and structure data."
+        ]
+      },
+      {
+        "id": "train-example-lcao-spin1",
+        "function_id": "hotham.train",
+        "directory": "aimlab-tools/tests/train-example-lcao-spin1",
+        "instructions": "aimlab-tools/tests/train-example-lcao-spin1/README.md",
+        "entrypoint": "hotham/entrypoints/main.py",
+        "resources": [
+          "hotham-tests/training/example_lcao_spin1",
+          "hotham-tests/training.md"
+        ],
+        "expected_outputs": [
+          {
+            "path": "log.txt",
+            "format": "text",
+            "description": "Actual training log through epoch 10 with finite metrics"
+          },
+          {
+            "path": "checkpoint/cp5.pth",
+            "format": "PyTorch .pth",
+            "description": "Readable checkpoint saved at epoch 5"
+          },
+          {
+            "path": "checkpoint/cp10.pth",
+            "format": "PyTorch .pth",
+            "description": "Readable checkpoint saved at epoch 10"
+          }
+        ],
+        "pass_criteria": [
+          "Every actual command exits 0.",
+          "Complete 10 epochs with finite loss and reported metrics; write nonempty checkpoint/cp5.pth and checkpoint/cp10.pth and confirm both checkpoints can be loaded in the selected Hot-Ham environment. No fit-accuracy threshold is required."
+        ]
+      },
+      {
+        "id": "train-example-tb",
+        "function_id": "hotham.train",
+        "directory": "aimlab-tools/tests/train-example-tb",
+        "instructions": "aimlab-tools/tests/train-example-tb/README.md",
+        "entrypoint": "hotham/entrypoints/main.py",
+        "resources": [
+          "hotham-tests/training/example_tb",
+          "hotham-tests/training.md"
+        ],
+        "expected_outputs": [
+          {
+            "path": "log.txt",
+            "format": "text",
+            "description": "Actual training log through epoch 10 with finite metrics"
+          },
+          {
+            "path": "checkpoint/cp5.pth",
+            "format": "PyTorch .pth",
+            "description": "Readable checkpoint saved at epoch 5"
+          },
+          {
+            "path": "checkpoint/cp10.pth",
+            "format": "PyTorch .pth",
+            "description": "Readable checkpoint saved at epoch 10"
+          }
+        ],
+        "pass_criteria": [
+          "Every actual command exits 0.",
+          "Complete 10 epochs with finite loss and reported metrics; write nonempty checkpoint/cp5.pth and checkpoint/cp10.pth and confirm both checkpoints can be loaded in the selected Hot-Ham environment. No fit-accuracy threshold is required."
+        ]
+      },
+      {
+        "id": "infer-example-lcao",
+        "function_id": "hotham.infer",
+        "directory": "aimlab-tools/tests/infer-example-lcao",
+        "instructions": "aimlab-tools/tests/infer-example-lcao/README.md",
+        "entrypoint": "hotham/entrypoints/main.py",
+        "resources": [
+          "hotham-tests/inference/example_lcao",
+          "hotham-tests/inference.md"
+        ],
+        "expected_outputs": [
+          {
+            "path": "h_pred_0.csr",
+            "format": "ABACUS old CSR",
+            "description": "Predicted Hamiltonian"
+          },
+          {
+            "path": "h_ref_0.csr",
+            "format": "ABACUS old CSR",
+            "description": "Reference Hamiltonian"
+          },
+          {
+            "path": "olp.csr",
+            "format": "ABACUS old CSR",
+            "description": "Overlap"
+          },
+          {
+            "path": "band.png",
+            "format": "PNG",
+            "description": "Predicted/reference band comparison"
+          },
+          {
+            "path": "eigen.npy",
+            "format": "NumPy dictionary",
+            "description": "Predicted/reference eigenvalues"
+          },
+          {
+            "path": "dos.npy",
+            "format": "NumPy dictionary",
+            "description": "Finite DOS arrays"
+          },
+          {
+            "path": "dos.png",
+            "format": "PNG",
+            "description": "Readable DOS plot"
+          }
+        ],
+        "pass_criteria": [
+          "Every actual command exits 0.",
+          "CSR outputs h_pred_0.csr, h_ref_0.csr and olp.csr are nonempty and parseable, with consistent matrix dimensions and finite stored values. diagonal.py -diag exits 0; eigen.npy and dos.npy are readable with finite arrays and shapes consistent with the configured k-points, orbitals and energy grid; band.png and dos.png are readable nonempty images. No predicted/reference agreement or accuracy threshold is required."
+        ]
+      }
+    ]
+  }
+}

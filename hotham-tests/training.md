@@ -58,13 +58,4 @@ To resume training, keep the dataset and model settings consistent with the chec
 
 1. Enter the example directory and review `hotham-input.yaml` and `jobfile-hotham`.
 2. Submit the training job with `sbatch jobfile-hotham`.
-3. After the job finishes, check `log.txt` and the saved checkpoints in the example directory.
-
-**Reference results**
-After running each example with its provided dataset and input file for at least `1500` epochs, check the `Train_MSE` and `Train_MAE` values on the `Epoch:1500` line in `log.txt`. Both values should be below the following conservative reference limits:
-
-| Example | Train_MSE | Train_MAE |
-| --- | ---: | ---: |
-| `example_lcao_spin1` | 0.001 | 0.03 |
-| `example_tb` | 0.001 | 0.03 |
-
+3. After the job finishes, check `log.txt` and the saved checkpoints in `model_save_path/checkpoint/` (`./checkpoint/` in these examples).
