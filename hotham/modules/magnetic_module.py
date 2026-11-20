@@ -283,6 +283,7 @@ class MagMessagePassing(torch.nn.Module):
                 f_edge = self.LayerNorm_edge[layer_index](f_edge)
                 if self.para.longrange:
                     f_node_lr = self.Longranges[layer_index](f_node, data)
-                    f_node = (f_node + f_node_lr) / (2**0.5)
+                    factor = self.para.longrange_factor
+                    f_node = (f_node + factor * f_node_lr) / ((1 + factor**2)**0.5)
 
         return f_node, f_edge

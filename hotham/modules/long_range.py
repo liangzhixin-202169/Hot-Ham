@@ -1,4 +1,5 @@
 import torch
+import math
 from typing import Union
 from collections import defaultdict
 from e3nn.o3 import Irreps
@@ -11,7 +12,7 @@ class LongRange(torch.nn.Module):
         self.irreps_node = irreps_node
         self.para = para
 
-        self.N_dl = [1, 1, -1]
+        self.Nk = tuple(para.longrange_grid)
 
         idx_by_l = defaultdict(list)
         offset = 0
@@ -23,10 +24,11 @@ class LongRange(torch.nn.Module):
             self.register_buffer(f"idx_by_{l}", torch.tensor(idx_by_l[l], dtype=para.torch_int_dtype))
         self.l_list = list(sorted(idx_by_l.keys()))
 
-        self.amplitude_1 = torch.tensor(
-            [0.2750, 0.1375, 0.0688, 0.0344, 0.0172, 0.0086, 0.0043, 0.0021, 0.0011, 0.0005, 0.0003, 0.0001], dtype=para.torch_float_dtype
-        )
-        self.shift_1 = torch.tensor([2.8, 5.7, 11.4, 22.7, 45.5, 91.0, 182.0, 364.0, 728.0, 1456.0, 2912.0, 5823.9], dtype=para.torch_float_dtype)
+        # Log-uniform initialization including both endpoints; widths remain trainable.
+        minimum, maximum, count = para.longrange_range
+        self.shift_1 = torch.logspace(math.log10(minimum), math.log10(maximum),
+                                     steps=count, dtype=para.torch_float_dtype)
+        self.amplitude_1 = 0.2750 * minimum / self.shift_1
         self.wl = torch.nn.Parameter(self.amplitude_1 * (torch.sqrt(torch.tensor(torch.pi, dtype=para.torch_float_dtype)) ** 3) * self.shift_1**3)
         self.sl = torch.nn.Parameter(-torch.log(2 / self.shift_1))
 
@@ -39,8 +41,7 @@ class LongRange(torch.nn.Module):
         cell_inv = torch.linalg.inv(box)
         G = 2 * torch.pi * cell_inv.T
 
-        norms = torch.norm(box, dim=1)
-        Nk = [max(1, int(n.item() / self.N_dl[i])) for i, n in enumerate(norms)]
+        Nk = self.Nk
         n1 = torch.arange(-Nk[0], Nk[0] + 1, dtype=self.para.torch_int_dtype, device=device)
         n2 = torch.arange(-Nk[1], Nk[1] + 1, dtype=self.para.torch_int_dtype, device=device)
         n3 = torch.arange(-Nk[2], Nk[2] + 1, dtype=self.para.torch_int_dtype, device=device)

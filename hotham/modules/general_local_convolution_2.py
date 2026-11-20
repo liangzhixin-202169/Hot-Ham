@@ -207,7 +207,7 @@ if _TRITON_AVAILABLE:
 
 
     @tr.jit(do_not_specialize=["B"])
-    def _natural_rotation(X, D, GATE, MASK, Y, B, C: tl.constexpr,
+    def _natural_rotation_kernel(X, D, GATE, MASK, Y, B, C: tl.constexpr,
                   L: tl.constexpr, PACK: tl.constexpr, GATED: tl.constexpr,
                   BC: tl.constexpr, BJ: tl.constexpr, DEGREE: tl.constexpr = -1):
         l = tl.program_id(1) if DEGREE < 0 else tl.full((), DEGREE, tl.int32)
@@ -264,7 +264,7 @@ if _TRITON_AVAILABLE:
         # One launch, separately optimized address arithmetic for each degree.
         for degree in tl.static_range(L+1):
             if tl.program_id(1) == degree:
-                _natural_rotation(X,D,GATE,MASK,Y,B,C,L,PACK,GATED,BC,BJ,degree)
+                _natural_rotation_kernel(X,D,GATE,MASK,Y,B,C,L,PACK,GATED,BC,BJ,degree)
 
 
     @tr.jit(do_not_specialize=["B"])
@@ -354,7 +354,7 @@ if _TRITON_AVAILABLE:
         b = mask.numel()
         y = torch.empty((b*c*(l+1)**2,), device=x.device, dtype=x.dtype)
         if _natural_ROTATION_VARIANT == "legacy":
-            kernel,bc,grid,fusion = _natural_rotation,16,(tr.cdiv(b*c,16),l+1),False
+            kernel,bc,grid,fusion = _natural_rotation_kernel,16,(tr.cdiv(b*c,16),l+1),False
         elif l>=4 and (pack or c>=64):
             bc = min(128,max(16,tr.next_power_of_2(c)))
             kernel,grid,fusion = _natural_rotation_dot,(b*tr.cdiv(c,bc),l+1),True
