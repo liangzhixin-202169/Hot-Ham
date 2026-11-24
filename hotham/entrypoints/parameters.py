@@ -17,7 +17,7 @@ INPUT_PARAMETERS = frozenset({
     "epoch", "seed", "fix_average",
     "magnetism", "soc", "first_channel", "mid_channel", "lcaoversion",
     "mag_cutoff", "using_layernorm", "self_interaction_by_edge",
-    "longrange", "longrange_grid", "longrange_range", "longrange_factor",
+    "longrange", "longrange_range", "longrange_factor",
     "band_range", "delta", "dos_sigma", "dos_weight",
     "dump_sparseH", "e_range", "nn_split_scale",
     "using_dosloss", "using_element_net", "using_soc",
@@ -32,15 +32,11 @@ def validate_input_parameters(para):
     if unknown:
         raise ValueError("Unknown input parameter(s): " + ", ".join(map(repr, unknown)))
     if para.get("longrange", False):
-        for key in ("longrange_grid", "longrange_range"):
-            if key not in para:
-                raise ValueError(f"{key} is required when longrange is true")
-    if "longrange_grid" in para:
-        grid = para["longrange_grid"]
-        if not isinstance(grid, (list, tuple)) or len(grid) != 3 or any(
-            type(value) is not int or value < 0 for value in grid
-        ):
-            raise ValueError("longrange_grid must contain three nonnegative integers")
+        rc = para.get("rc")
+        if type(rc) not in (int, float) or not math.isfinite(rc) or rc <= 0:
+            raise ValueError("longrange requires a finite positive rc")
+        if "longrange_range" not in para:
+            raise ValueError("longrange_range is required when longrange is true")
     if "longrange_range" in para:
         interval = para["longrange_range"]
         if not isinstance(interval, (list, tuple)) or len(interval) != 3:

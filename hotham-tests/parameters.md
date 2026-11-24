@@ -57,8 +57,7 @@ For other parameters used in specific `*.py` files, check the table below.
 | `magnetism` | — | str | `nonmag`, `collinear`, or `non-collinear`. |
 | `soc` | — | bool | whether to include spin-orbit coupling. |
 | `self_interaction_by_edge` | `False` | bool | Additional feature generation.<br>Set to `True` for slower computation with higher parameters. |
-| `longrange` | `False` | bool | Enable long-range LCAO message-passing blocks (in dev). |
-| `longrange_grid` | — | list[int] | Required when `longrange: true`. Three nonnegative reciprocal-lattice index limits, e.g. `[10, 10, 10]` samples each index from -10 to 10; dimensionless, excluding the zero wavevector. |
+| `longrange` | `False` | bool | Enable long-range LCAO message-passing blocks. When enabled, the long-range branch automatically includes nonzero reciprocal vectors of magnitude at most `2π/rc` and normalizes Fourier coefficients by the cell volume before spectral gating. |
 | `longrange_range` | — | list | Required when `longrange: true`. `[minimum_scale, maximum_scale, count]`, e.g. `[0.5, 8, 8]`: initialize 8 Gaussian scales geometrically from 0.5 to 8 Å, including both endpoints. Scales must satisfy 0 < min ≤ max; count is a positive integer (count=1 requires min=max). Initial amplitudes are `0.275 * minimum_scale / scale`; kernel weights and widths remain trainable and are not constrained to this initial range. |
 | `longrange_factor` | `1` | float | Long-range mixing strength α: `(x + α * x_LR) / sqrt(1 + α²)`. Setting 0 recovers the local features. |
 | `using_layernorm` | `2` | int | Layer normalization methods: `2` centers every representation and scales only scalars; `3` centers and scales every representation. |
