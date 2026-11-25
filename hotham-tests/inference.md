@@ -34,6 +34,9 @@ Before running it, edit the `inputfile` dictionary near the end of it:
 - `H_ref_0_csr`: optional path to `h_ref_0.csr`.
 - `H_ref_1_csr`: optional path, only needed for `spin=2`, 
 - `S_csr`: path to `olp.csr`.
+- `residual_H`: If you use residual_H training method, set it to `true`.
+- `H_0_0_csr`: path to `H_0_0.csr`, required when `residual_H` is `True`.
+- `H_0_1_csr`: path to `H_0_1.csr`, required when `residual_H` is `True` and `spin=2`.
 - `band_kpoints_num`: total number of points along the band path passing to ASE.
 - `band_kpoints_path`: high-symmetry path passing to ASE.
 - `band_kpoints_pbc`: periodic boundary conditions passing to ASE.
@@ -76,6 +79,7 @@ python diagonal.py -band 0
 
 The exportation write `*.npz` to `matrix_band/k0/`, `matrix_band/k1/`, etc., or to `matrix_dos/` with a `kinfo.txt` writing k_weights.
 
+This feature is useful for systems with thousands of atoms or more when used with [`diagonal_for_big_csr.jl`](../hotham/tools/diagonal_for_big_csr.jl).
 
 ### 6. Additional Functions: Export the rR matrix
 Training does not use the position matrix `rR`, but we support passing `rR` through the dataflow for convenience in post-processing.
@@ -94,6 +98,8 @@ Secondly, do normal prediction with `rR` in `write` to export a `rR.csr`
 ```yaml
 write: [h_pred, olp, rR]
 ```
+
+This process is necessary to calculate properties like optical conductivity。
 
 ## OrthTB Hamiltonian model(WIP)
 

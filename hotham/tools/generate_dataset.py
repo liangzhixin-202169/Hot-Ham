@@ -685,6 +685,18 @@ class AbacusData(DataBase):
             # overlap     (key, orbit_0, oribit_1)
             HR, H1, SR, rR = self.get_HS(HS_file=HS_file, TotalOrbital=TotalOrbital)
 
+            if self.para.get("residual_H", False) is True and HS_file["H0_file"] is not None:
+                for spin, blocks in enumerate((HR, H1)):
+                    if HS_file[f"H{spin}_file"] is None:
+                        continue
+                    baseline = self.get_Hamiltonian(
+                        os.path.join(root, f"data-H0R-sparse_SPIN{spin}.csr"), TotalOrbital
+                    )
+                    for shift, block in baseline.items():
+                        blocks[shift] = blocks[shift] - block if shift in blocks else -block
+                for shift in H1.keys() - HR.keys():
+                    HR[shift] = torch.zeros_like(H1[shift])
+
             # 1.calculate and check neighbor list
             # 2.convert abacus's Hamiltonian and overlap to hotham's order
             #   Hamiltonian  (n_type, n_type, edge, spin, orbit_0, oribit_1)
@@ -1029,6 +1041,13 @@ class OpenmxData(DataBase):
             # overlap     (key, orbit_0, oribit_1)
             HR, iHR, SR, rR = self.get_HS(HS_file)
 
+            if self.para.get("residual_H", False) is True and os.path.basename(HS_file) == "hamiltonian.txt":
+                H0, iH0, _, _ = self.get_HS(os.path.join(root, "h0.txt"))
+                for reference, baseline in ((HR, H0), (iHR, iH0)):
+                    for spin, blocks in reference.items():
+                        for key, block in blocks.items():
+                            blocks[key] = block - baseline[spin][key]
+
             # infer neighbor list from HR[0]
             if len(HR) > 0:
                 keys = np.array(list(HR[0].keys()))
@@ -1102,7 +1121,7 @@ if __name__ == "__main__":
 
         "dft": "openmx", #"openmx" or "abacus"
         "hamiltonian_type": "lcao", #"lcao" or "orthtb"
-
+        
         "orbit": {
             "C": ["1s", "2s", "2p", "3p", "3d"],
         },
@@ -1115,6 +1134,7 @@ if __name__ == "__main__":
         # lcao only
         "magnetism": "nonmag", #"nonmag", "collinear", or "non-collinear"
         "soc": False,
+        "residual_H": False,
 
         # lcao only, ABACUS only, leave unchanged unless necessary
         "orbital_cutoff": {

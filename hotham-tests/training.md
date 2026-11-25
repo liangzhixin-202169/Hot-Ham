@@ -59,3 +59,15 @@ To resume training, keep the dataset and model settings consistent with the chec
 1. Enter the example directory and review `hotham-input.yaml` and `jobfile-hotham`.
 2. Submit the training job with `sbatch jobfile-hotham`.
 3. After the job finishes, check `log.txt` and the saved checkpoints in `model_save_path/checkpoint/` (`./checkpoint/` in these examples).
+
+## 5. Advanced Tricks: Residual Hamiltonian Training
+For LCAO models, the training target can be the difference between the converged Hamiltonian and a baseline Hamiltonian for the same structure, `ΔH = H − H₀`. During reconstruction, add `H₀` to the predicted `ΔH` to recover the full Hamiltonian.
+
+To prepare `H₀`, start from the initial charge density and limit the SCF run to one iteration. Use `scf.maxIter 1` in OpenMX or `scf_nmax 1` in ABACUS. Keep the structure, basis, and other Hamiltonian settings consistent with the converged calculation. The baseline run only needs to produce the Hamiltonian, so SCF convergence is unnecessary.
+
+- **OpenMX** — Place the converged `hamiltonian.txt` and the exported h0 baseline, renamed to `h0.txt`, in the same directory. One subtraction will be completed.
+- **ABACUS** — Place the converged `data-HR-sparse_SPIN0.csr` and the exported h0 baseline, renamed to `data-H0R-sparse_SPIN0.csr` in the same directory. One subtraction will be completed. For systems with `SPIN=2`, you will also need `data-HR-sparse_SPIN1.csr` and `data-H0R-sparse_SPIN1.csr`.
+
+- Set `residual_H` to `True` in `generate_dataset.py` to generate the residual datasets.
+- Use the same training procedure as for the full Hamiltonian, only with the residual datasets as input.
+- For band calculations with `diagonal.py`, prepare the corresponding baseline CSR for the inference structure. For OpenMX, you will need [`h0.txt_to_csr.py`](../hotham/tools/h0.txt_to_csr.py) to convert `h0.txt` to CSR format.

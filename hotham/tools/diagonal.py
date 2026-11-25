@@ -145,6 +145,25 @@ class Electron():
         if self.spin == 2:
             self.matrix_HR_pred = combine_spin(self.matrix_HR_pred, read_csr(self.para["H_pred_1_csr"], True))
             self.matrix_SR = combine_spin(self.matrix_SR, self.matrix_SR)
+        if self.para.get("residual_H", False) is True:
+            h0 = read_csr(self.para["H_0_0_csr"], True)
+            if self.spin == 2:
+                h0 = combine_spin(h0, read_csr(self.para["H_0_1_csr"], True))
+            pred = self.matrix_HR_pred
+            if pred["dim"] != h0["dim"]:
+                raise ValueError("Predicted Hamiltonian and H0 have different matrix dimensions")
+
+            # Both folding paths sum contributions at matching matrix indices.
+            # Keep each input's cell shifts so their order and support may differ.
+            self.matrix_HR_pred = {
+                "cell_shifts": np.concatenate((pred["cell_shifts"], h0["cell_shifts"])),
+                "cell_idx": np.concatenate((pred["cell_idx"], h0["cell_idx"] + pred["n_cell"])),
+                "row": np.concatenate((pred["row"], h0["row"])),
+                "col": np.concatenate((pred["col"], h0["col"])),
+                "value": np.concatenate((pred["value"], h0["value"])),
+                "dim": pred["dim"],
+                "n_cell": pred["n_cell"] + h0["n_cell"],
+            }
         if self.has_H_ref:
             self.matrix_HR_ref = read_csr(self.para["H_ref_0_csr"], True)
             if self.spin == 2:
@@ -360,6 +379,10 @@ if __name__ == "__main__":
         "H_ref_1_csr": "./h_ref_1.csr",
 
         "S_csr": "./olp.csr",
+        # residual H only, only apply to H_pred
+        "residual_H": False,
+        "H_0_0_csr": "./h_0_0.csr",
+        "H_0_1_csr": "./h_0_1.csr",
 
         # para band
         "band_kpoints_num":45,
