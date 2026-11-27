@@ -1,8 +1,32 @@
 import torch
+import math
 from typing import Union
 from collections import defaultdict
 from e3nn.o3 import Irreps
 from .te3nn.to3 import TO3_Irreps
+
+
+class SpectralChannelGate(torch.nn.Module):
+    """Mix equivalent channels and gate their phase/rotation-invariant power."""
+
+    def __init__(self, indices, channels, l, para):
+        super().__init__()
+        self.register_buffer("indices", torch.tensor(indices, dtype=para.torch_int_dtype), persistent=False)
+        self.channels = channels
+        self.components = 2 * l + 1
+        self.weight = torch.nn.Parameter(torch.eye(channels, dtype=para.torch_float_dtype))
+        self.alpha = torch.nn.Parameter(torch.zeros(channels, dtype=para.torch_float_dtype))
+        self.beta = torch.nn.Parameter(torch.zeros(channels, dtype=para.torch_float_dtype))
+
+    def forward(self, real, imag):
+        # The same real, bias-free matrix acts on both Fourier quadratures.
+        shape = (real.shape[0], self.channels, self.components)
+        real = torch.einsum("ab,kbm->kam", self.weight, real.reshape(shape))
+        imag = torch.einsum("ab,kbm->kam", self.weight, imag.reshape(shape))
+        power = (real.square() + imag.square()).mean(dim=-1)
+        # Fixed q0=1 in the current feature convention; no new normalization.
+        gate = 2 * torch.sigmoid(self.alpha * torch.log1p(power) + self.beta)
+        return (real * gate[..., None]).flatten(1), (imag * gate[..., None]).flatten(1)
 
 
 class LongRange(torch.nn.Module):
@@ -11,7 +35,7 @@ class LongRange(torch.nn.Module):
         self.irreps_node = irreps_node
         self.para = para
 
-        self.N_dl = [1, 1, -1]
+        self.k_cutoff = 2 * math.pi / para.rc
 
         idx_by_l = defaultdict(list)
         offset = 0
@@ -23,87 +47,67 @@ class LongRange(torch.nn.Module):
             self.register_buffer(f"idx_by_{l}", torch.tensor(idx_by_l[l], dtype=para.torch_int_dtype))
         self.l_list = list(sorted(idx_by_l.keys()))
 
-        self.amplitude_1 = torch.tensor(
-            [0.2750, 0.1375, 0.0688, 0.0344, 0.0172, 0.0086, 0.0043, 0.0021, 0.0011, 0.0005, 0.0003, 0.0001], dtype=para.torch_float_dtype
-        )
-        self.shift_1 = torch.tensor([2.8, 5.7, 11.4, 22.7, 45.5, 91.0, 182.0, 364.0, 728.0, 1456.0, 2912.0, 5823.9], dtype=para.torch_float_dtype)
+        # Keep parity and time-reversal types separate, even at the same l.
+        groups = {}
+        offset = 0
+        for mul, ir in self.irreps_node:
+            key = (ir.l, ir.p, getattr(ir, "t_p", 1))
+            width = mul * (2 * ir[0] + 1)
+            if key not in groups:
+                groups[key] = [[], 0]
+            groups[key][0].extend(range(offset, offset + width))
+            groups[key][1] += mul
+            offset += width
+        self.spectral_groups = torch.nn.ModuleList([
+            SpectralChannelGate(indices, channels, ir[0], para)
+            for ir, (indices, channels) in groups.items()
+        ])
+
+        # Log-uniform initialization including both endpoints; widths remain trainable.
+        minimum, maximum, count = para.longrange_range
+        self.shift_1 = torch.logspace(math.log10(minimum), math.log10(maximum),
+                                     steps=count, dtype=para.torch_float_dtype)
+        self.amplitude_1 = 0.2750 * minimum / self.shift_1
         self.wl = torch.nn.Parameter(self.amplitude_1 * (torch.sqrt(torch.tensor(torch.pi, dtype=para.torch_float_dtype)) ** 3) * self.shift_1**3)
         self.sl = torch.nn.Parameter(-torch.log(2 / self.shift_1))
 
     def forward(self, x, data):
         device = x.device
         dtype = x.dtype
-        n = x.shape[0]
+        box = data.lattice.to(device=device, dtype=torch.float64)
+        reciprocal = 2 * math.pi * torch.linalg.inv(box).T
+        volume = torch.linalg.det(box).abs().to(dtype)
+        # n_i = k dot a_i / (2*pi), also for nonorthogonal cells.
+        bounds = torch.ceil(torch.linalg.vector_norm(box, dim=1) / self.para.rc).long().tolist()
+        axes = [torch.arange(-limit, limit + 1, device=device) for limit in bounds]
+        indices = torch.cartesian_prod(*axes)
+        i, j, k = indices.unbind(dim=1)
+        half = (i > 0) | ((i == 0) & ((j > 0) | ((j == 0) & (k > 0))))
+        vectors = indices[half].to(box.dtype) @ reciprocal
+        squared = vectors.square().sum(dim=1)
+        # Include points on the cutoff sphere up to floating-point roundoff.
+        inside = squared <= self.k_cutoff**2 * (1 + 32 * torch.finfo(box.dtype).eps)
+        kvec = vectors[inside].to(dtype)
+        k_sq = squared[inside].to(dtype)
 
-        box = data.lattice.to(dtype)
-        cell_inv = torch.linalg.inv(box)
-        G = 2 * torch.pi * cell_inv.T
-
-        norms = torch.norm(box, dim=1)
-        Nk = [max(1, int(n.item() / self.N_dl[i])) for i, n in enumerate(norms)]
-        n1 = torch.arange(-Nk[0], Nk[0] + 1, dtype=self.para.torch_int_dtype, device=device)
-        n2 = torch.arange(-Nk[1], Nk[1] + 1, dtype=self.para.torch_int_dtype, device=device)
-        n3 = torch.arange(-Nk[2], Nk[2] + 1, dtype=self.para.torch_int_dtype, device=device)
-
-        nvec = torch.stack(torch.meshgrid(n1, n2, n3, indexing="ij"), dim=-1).reshape(-1, 3)
-        nvec = nvec.to(G.dtype)
-        kvec = nvec @ G
-
-        # Apply k-space cutoff and filter
-        k_sq = torch.sum(kvec**2, dim=1)
-        mask = k_sq > 0
-        kvec = kvec[mask]  # [M, 3]
-        k_sq = k_sq[mask]  # [M]
-        nvec = nvec[mask]  # [M, 3]
-
-        non_zero = (nvec != 0).to(self.para.torch_int_dtype)
-        first_non_zero = torch.argmax(non_zero, dim=1)
-        sign = torch.gather(nvec, 1, first_non_zero.unsqueeze(1)).squeeze()
-        hemisphere_mask = (sign > 0) | ((nvec == 0).all(dim=1))
-        kvec = kvec[hemisphere_mask]
-        k_sq = k_sq[hemisphere_mask]
-        factors = torch.where((nvec[hemisphere_mask] == 0).all(dim=1), 1.0, 2.0).to(dtype)
-        factors = factors / factors.sum()
-
-        # Compute structure factor S(k), Σq*e^(ikr)
-        k_dot_r = torch.matmul(data.pos, kvec.T)  # [n, M]
+        k_dot_r = data.pos.to(dtype) @ kvec.T
         cos_k_dot_r = torch.cos(k_dot_r)
         sin_k_dot_r = torch.sin(k_dot_r)
 
         sigma2_at_kspace = -1 / torch.exp(-2 * self.sl)
-        Gaussian_multiplier = (self.wl[None, :] * torch.exp(k_sq.unsqueeze(-1) * sigma2_at_kspace)).sum(dim=1) * factors
+        Gaussian_multiplier = (self.wl[None, :] * torch.exp(k_sq.unsqueeze(-1) * sigma2_at_kspace)).sum(dim=1) / volume
 
         out = torch.zeros_like(x)
-        for l in self.l_list:
-            idx_by_l = getattr(self, f"idx_by_{l}")
-            # sub_x = x[:, idx_by_l].reshape(n, -1, 2 * l + 1)
-            sub_x = x[:, idx_by_l]
-
-            sub_x_at_kspace_by_cos = torch.einsum("nm,nk->km", sub_x, cos_k_dot_r)
-            sub_x_at_kspace_by_sin = torch.einsum("nm,nk->km", sub_x, sin_k_dot_r)
-
-            sub_x_at_kspace_by_cos = sub_x_at_kspace_by_cos * Gaussian_multiplier[:, None]
-            sub_x_at_kspace_by_sin = sub_x_at_kspace_by_sin * Gaussian_multiplier[:, None]
-
-            sub_x_by_cos = torch.einsum("km,nk->nm", sub_x_at_kspace_by_cos, cos_k_dot_r)
-            sub_x_by_sin = torch.einsum("km,nk->nm", sub_x_at_kspace_by_sin, sin_k_dot_r)
-
-            # out[:, idx_by_l] = (sub_x_by_cos + sub_x_by_sin).reshape(n, -1)
-            out[:, idx_by_l] = sub_x_by_cos + sub_x_by_sin
-            pass
+        for group in self.spectral_groups:
+            sub_x = x[:, group.indices]
+            real = torch.einsum("nm,nk->km", sub_x, cos_k_dot_r)
+            imag = torch.einsum("nm,nk->km", sub_x, sin_k_dot_r)
+            real = real * Gaussian_multiplier[:, None]
+            imag = imag * Gaussian_multiplier[:, None]
+            real, imag = group(real, imag)
+            out[:, group.indices] = 2 * (  # Reconstruct both +k and -k.
+                torch.einsum("km,nk->nm", real, cos_k_dot_r)
+                + torch.einsum("km,nk->nm", imag, sin_k_dot_r)
+            )
 
         return out
-        # if q.dim() == 1:
-        #     q = q.unsqueeze(1)
-        # # for torchscript compatibility, to avoid dtype mismatch, only use real part
-        # cos_k_dot_r = torch.cos(k_dot_r)
-        # sin_k_dot_r = torch.sin(k_dot_r)
-        # S_k_real = (q.unsqueeze(2) * cos_k_dot_r.unsqueeze(1)).sum(dim=0)
-        # S_k_imag = (q.unsqueeze(2) * sin_k_dot_r.unsqueeze(1)).sum(dim=0)
-        # S_k_sq = S_k_real**2 + S_k_imag**2  # [M]
-
-        # min_term = -1 / torch.exp(-2 * self.sl)
-        # min_term = min_term.view(1, 1, 1, -1)
-        # kfac = self.wl.view(1, 1, 1, -1) * torch.exp(k_sq.unsqueeze(-1) * min_term)
-        # # print("multiplier:",multiplier.shape,multiplier)c
-        # kfac = kfac.sum(dim=-1)

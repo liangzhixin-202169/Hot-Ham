@@ -19,7 +19,7 @@ For other parameters used in specific `*.py` files, check the table below.
 | `orbit` | — | dict | LCAO: all orbitals of the DFT numerical basis. <br>OrthTB: High-principal-quantum-number orbitals used by the TB model. |
 | `basis` | `Chebyshev` | str | Radial distance embedding type. Another choice is `Gaussian`. |
 | `basis_size` | `32` | int | Number of radial embedding features. |
-| `L_max` | — | int | Maximum angular-momentum order of equivariant features, must >= 2*l for the highest orbital in `orbit`.<br>For example, if `f`(l=3) is in `orbit`, use `L_max >= 6`.<br>The `L_max` for dataset must >= the `L_max` for training. |
+| `L_max` | — | int | Maximum angular-momentum order of equivariant features. Let `l` be the highest orbital order in `orbit`.<br>For LCAO without SOC and with `magnetism: nonmag` or `collinear`, use `L_max >= 2*l`: at least 4 for d or 6 for f orbitals.<br>For LCAO with SOC or `magnetism: non-collinear`, use `L_max >= 2*l+1` to cover the spin-coupled output: at least 5 for d or 7 for f orbitals.<br>For OrthTB, use `L_max >= 2*l`.<br>Higher orders can describe more angular detail in the environment and affect lower-order outputs, but may increase cost and do not guarantee better accuracy.<br>The dataset `L_max` must be at least the model `L_max` for training or inference. |
 | `rc` | — | float | Radial embedding cutoff in Å for both models. Set it slightly larger than twice the largest orbital cutoff radius among all elements in the system.<br>OrthTB also uses it as the neighbor cutoff when generating graph edges. |
 | `nn_split_scale` | `1` | int | Number of edge chunks used in convolution; `1` disables splitting. |
 
@@ -57,7 +57,9 @@ For other parameters used in specific `*.py` files, check the table below.
 | `magnetism` | — | str | `nonmag`, `collinear`, or `non-collinear`. |
 | `soc` | — | bool | whether to include spin-orbit coupling. |
 | `self_interaction_by_edge` | `False` | bool | Additional feature generation.<br>Set to `True` for slower computation with higher parameters. |
-| `longrange` | `False` | bool | Enable long-range LCAO message-passing blocks (in dev). |
+| `longrange` | `False` | bool | Enable long-range LCAO message-passing blocks. When enabled, the long-range branch automatically includes nonzero reciprocal vectors of magnitude at most `2π/rc` and normalizes Fourier coefficients by the cell volume before spectral gating. |
+| `longrange_range` | — | list | Required when `longrange: true`. `[minimum_scale, maximum_scale, count]`, e.g. `[0.5, 8, 8]`: initialize 8 Gaussian scales geometrically from 0.5 to 8 Å, including both endpoints. Scales must satisfy 0 < min ≤ max; count is a positive integer (count=1 requires min=max). Initial amplitudes are `0.275 * minimum_scale / scale`; kernel weights and widths remain trainable and are not constrained to this initial range. |
+| `longrange_factor` | `1` | float | Long-range mixing strength α: `(x + α * x_LR) / sqrt(1 + α²)`. Setting 0 recovers the local features. |
 | `using_layernorm` | `2` | int | Layer normalization methods: `2` centers every representation and scales only scalars; `3` centers and scales every representation. |
 | **Model** |  |  |  |
 | `mag_cutoff` | — | list | Cutoff radius for the magnetic embedding, needed when `magnetism` is not `nonmag`. |

@@ -2,6 +2,7 @@ import ase.data
 import torch
 import ase
 import numpy as np
+import math
 
 
 # User-facing keys documented in hotham-skills/parameters.md. Internal keys such
@@ -16,7 +17,8 @@ INPUT_PARAMETERS = frozenset({
     "epoch", "seed", "fix_average",
     "magnetism", "soc", "first_channel", "mid_channel", "lcaoversion",
     "mag_cutoff", "using_layernorm", "self_interaction_by_edge",
-    "longrange", "band_range", "delta", "dos_sigma", "dos_weight",
+    "longrange", "longrange_range", "longrange_factor",
+    "band_range", "delta", "dos_sigma", "dos_weight",
     "dump_sparseH", "e_range", "nn_split_scale",
     "using_dosloss", "using_element_net", "using_soc",
     "write",
@@ -29,6 +31,26 @@ def validate_input_parameters(para):
     unknown = sorted(set(para) - INPUT_PARAMETERS, key=str)
     if unknown:
         raise ValueError("Unknown input parameter(s): " + ", ".join(map(repr, unknown)))
+    if para.get("longrange", False):
+        rc = para.get("rc")
+        if type(rc) not in (int, float) or not math.isfinite(rc) or rc <= 0:
+            raise ValueError("longrange requires a finite positive rc")
+        if "longrange_range" not in para:
+            raise ValueError("longrange_range is required when longrange is true")
+    if "longrange_range" in para:
+        interval = para["longrange_range"]
+        if not isinstance(interval, (list, tuple)) or len(interval) != 3:
+            raise ValueError("longrange_range must be [minimum_scale, maximum_scale, count]")
+        minimum, maximum, count = interval
+        if any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0
+               for value in (minimum, maximum)) or minimum > maximum:
+            raise ValueError("longrange_range scales must be finite and satisfy 0 < minimum <= maximum")
+        if type(count) is not int or count <= 0 or (count == 1 and minimum != maximum):
+            raise ValueError("longrange_range count must be a positive integer; count=1 requires equal endpoints")
+    if "longrange_factor" in para:
+        factor = para["longrange_factor"]
+        if type(factor) not in (int, float) or not math.isfinite(factor):
+            raise ValueError("longrange_factor must be a finite number")
 
 class Parameters(dict):
     def __init__(self, para: dict):
@@ -76,6 +98,7 @@ class Parameters(dict):
         default_dict["nn_split_scale"] = 1
         default_dict["fix_average"] = False
         default_dict["longrange"] = False
+        default_dict["longrange_factor"] = 1
         default_dict["N_average"] = torch.tensor(-1.0)
 
         return default_dict
